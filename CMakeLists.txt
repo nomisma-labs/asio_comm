@@ -6,7 +6,7 @@ cmake_minimum_required(VERSION 3.30)
 # The version lives only here; releases are tagged v<version> (docs/kit/build.md#versioning).
 project(asio_comm
     VERSION 0.1.0
-    DESCRIPTION "asio_comm"
+    DESCRIPTION "C++ communication protocols for cryptocurrency exchanges"
     LANGUAGES CXX)
 
 include(cmake/kit/nom_kit.cmake)

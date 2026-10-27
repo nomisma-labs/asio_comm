@@ -1,7 +1,10 @@
 # asio_comm
 
 <!-- repo-description:begin -->
-TODO: what asio_comm is, in one paragraph.
+`asio_comm` will provide C++ implementations of WebSocket, HTTP and other communication
+protocols, initially for connectivity to cryptocurrency exchanges. The repository currently
+contains the shared build infrastructure; protocol implementations and tests will be added
+as development progresses.
 <!-- repo-description:end -->
 
 ## Build
