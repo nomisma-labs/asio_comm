@@ -1,0 +1,5 @@
+{
+    "app_name": "asio_comm_example",
+    "message": "Hello from the JSON configuration",
+    "debug_logging": true
+}
