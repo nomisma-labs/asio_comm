@@ -6,6 +6,13 @@ and versions follow [Semantic Versioning](https://semver.org); how to release:
 
 ## [Unreleased]
 
+### Changed
+
+- Sync cmake_template v0.11.2 and its documentation correction at `8ad7a4e`, adopting
+  `import std;` with CMake 4.4.x and per-target standard-library module support.
+- Pin base v0.2.1, json_config v0.2.1, assembly v0.3.1, and spd_logger v0.4.1.
+  The configuration and logging repositories also pin base v0.2.1.
+
 ### Added
 
 - Add pinned `base`, `json_config`, `spd_logger`, and `assembly` repository dependencies.

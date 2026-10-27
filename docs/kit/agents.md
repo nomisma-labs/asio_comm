@@ -32,7 +32,9 @@ repo's `AGENTS.md` imports it and adds the repo's own rules.
 - `tests/integration/`: library usage and installation checks, labeled `integration`.
 - `external/`: git submodules (third-party code pinned to release tags, and our own repos).
 - `cmake/kit/`: the shared CMake kit and presets ([cmake/kit/README.md](../../cmake/kit/README.md)).
-  Include only `cmake/kit/nom_kit.cmake`; `CMakePresets.json` includes `cmake/kit/presets.json`.
+  Include `cmake/kit/std_modules.cmake` before the first `project()` enabling CXX when using
+  `import std;`, then `cmake/kit/nom_kit.cmake` after `project()`.
+  `CMakePresets.json` includes `cmake/kit/presets.json`.
 - `tools/kit/`: the shared checks and scripts ([tools/kit/README.md](../../tools/kit/README.md)).
 - `docs/kit/`: these shared docs ([docs/kit/README.md](README.md)).
 - A repo's own CMake files go in `cmake/<repo>/`, its tools and docs in `tools/` and `docs/`,
@@ -65,7 +67,10 @@ a Python package, a dependency, an experiment.
   a derived repo.
 - Define our C++ library APIs in named modules; apps and tests import them.
   Keep macros in headers, and use wrappers or headers at third-party boundaries.
-  Put `#include`s before `import`s and include the std
-  headers you use yourself ([build.md](build.md#modules)).
+  Use `import std;` for standard-library declarations. Put macro-bearing and third-party
+  `#include`s before imports (in a global module fragment for module units). Enable each
+  consuming compiled target with `nom_enable_std_modules(target)`; keep guards when an
+  optional target may not exist. Source/package consumers must enable detection before their
+  own `project()` too ([build.md](build.md#modules)).
 - The version lives only in `project()`; releases follow [build.md](build.md#versioning).
 - When you change behaviour that a doc describes, update the doc in the same change.

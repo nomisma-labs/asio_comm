@@ -2,14 +2,22 @@
 
 The **kit** is the shared build framework for Nomisma repositories. It provides helpers for
 declaring libraries, applications, tests and installable packages, backed by common dependency
-and toolchain services. Include its entry point once, after `project()`:
+and toolchain services. Enable standard-library module detection before `project()`, then load
+the main kit after it:
 
 ```cmake
+cmake_minimum_required(VERSION 4.4)
+include(cmake/kit/std_modules.cmake)
+project(prices LANGUAGES CXX)
 include(cmake/kit/nom_kit.cmake)
 nom_project_options()
 ```
 
-Include only `nom_kit.cmake`; it loads the files below in the required order.
+`std_modules.cmake` is the pre-project entry point for CMake 4.4.x `import std` support.
+`nom_kit.cmake` loads the remaining files in the required order. Call
+`nom_enable_std_modules(target)` on each existing compiled target that imports `std` or consumes
+a module using it. This stays opt-in for third-party and header-only targets.
+See [standard-library modules](../../docs/kit/build.md#modules) for consumer setup and toolchains.
 
 | Location | Purpose |
 |---|---|
@@ -25,6 +33,7 @@ For a library defined in `core/prices/CMakeLists.txt`:
 nom_lib(prices
     MODULES prices.cppm
     SOURCES prices.cpp)
+nom_enable_std_modules(prices)
 
 nom_install_package(TARGETS prices)
 ```
@@ -37,6 +46,9 @@ For an application in `apps/capture/CMakeLists.txt`:
 
 ```cmake
 nom_app(capture SOURCES main.cpp DEPS nom::prices)
+if(nom_build_apps)
+    nom_enable_std_modules(capture)
+endif()
 ```
 
 This creates target `capture`, producing `bin/capture`. Use `capture` directly with

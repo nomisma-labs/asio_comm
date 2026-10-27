@@ -19,6 +19,11 @@ cmake --workflow --preset dev    # configure, build and test one preset
 
 Everyday commands, the presets and what bootstrap checks: [docs/kit/build.md](docs/kit/build.md).
 
+The build uses CMake 4.4.x, Ninja, GCC 16 or Clang 22, and libstdc++ 16 module sources for
+`import std;`. Source consumers must enable standard-library module detection before their
+first `project()` and opt compiled consumer targets into `nom_enable_std_modules(target)`;
+see [module setup](docs/kit/build.md#modules).
+
 ## Dependencies
 
 The repositories under `external/` are pinned Git submodules and are loaded through
@@ -28,10 +33,10 @@ application composition and event routing.
 
 | Repository | Pin |
 |---|---|
-| `base` | `v0.2.0` |
-| `json_config` | `v0.2.0` |
-| `spd_logger` | `v0.4.0` |
-| `assembly` | `v0.3.0` |
+| `base` | `v0.2.1` |
+| `json_config` | `v0.2.1` |
+| `spd_logger` | `v0.4.1` |
+| `assembly` | `v0.3.1` |
 
 `base` owns the common configuration types; `json_config` supplies JSON mapping and
 re-exports them. Declaring `base` first lets the configuration and logging libraries

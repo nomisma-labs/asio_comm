@@ -3,3 +3,6 @@
 
 nom_app(asio_comm_example SOURCES main.cpp
     DEPS nom::config_types nom::json_config nom::spd_logger nom::assembly)
+if(TARGET asio_comm_example)
+    nom_enable_std_modules(asio_comm_example)
+endif()

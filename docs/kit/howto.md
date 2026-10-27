@@ -87,8 +87,10 @@ module declaration; apps and tests consume them with `import nom.<repo>;`.
    ```cmake
    nom_lib(<repo> MODULES <repo>.cppm thing.cppm SOURCES thing.cpp)
    ```
-5. For standard-library or third-party includes inside a module unit, start with a global module
-   fragment (`module;`, then the includes) before the named module declaration. Keep dependencies
+5. Put `import std;` after the named module declaration when using standard-library facilities,
+   and call `nom_enable_std_modules(<repo>)` after creating the target. Enable the pre-project
+   setup described in [build.md](build.md#modules). For macro-bearing or third-party includes,
+   start with a global module fragment (`module;`, then the includes). Keep dependencies
    private when the API does not need their types: `core/example/settings.cpp` includes nlohmann
    privately and exports ordinary settings, parsing and serialization services through its
    interface partition. Macros remain in headers; include those before imports in consumers.
@@ -172,7 +174,8 @@ fixture and installed-package test.
 
 1. Add `tests/integration/library_usage/CMakeLists.txt`:
    ```cmake
-   cmake_minimum_required(VERSION 3.30)
+   cmake_minimum_required(VERSION 4.4)
+   include(${CMAKE_CURRENT_LIST_DIR}/../../../cmake/kit/std_modules.cmake)
    project(<repo>_library_usage LANGUAGES CXX)
 
    set(CMAKE_CXX_STANDARD 23)
@@ -190,6 +193,7 @@ fixture and installed-package test.
    enable_testing()
    add_executable(use_library use_library_test.cxx)
    target_link_libraries(use_library PRIVATE nom::<repo>)
+   nom_enable_std_modules(use_library)
    add_test(NAME use_library COMMAND use_library)
    ```
 2. Add `tests/integration/library_usage/use_library_test.cxx`: a `main()` that imports the
@@ -253,7 +257,7 @@ and packaging tools. Packaging does not choose or generate the Python API.
 
    [tool.scikit-build]
    minimum-version = "build-system.requires"
-   cmake.version = ">=3.30"
+   cmake.version = ">=4.4,<4.5"
    ninja.version = ">=1.11"
    cmake.build-type = "Release"
    wheel.packages = ["python/<package>"]

@@ -1,7 +1,9 @@
 # SPDX-FileCopyrightText: 2026 Alexey Tkachenko
 # SPDX-License-Identifier: LicenseRef-Nomisma-Labs-Proprietary
 
-cmake_minimum_required(VERSION 3.30)
+cmake_minimum_required(VERSION 4.4)
+
+include(cmake/kit/std_modules.cmake)
 
 # The version lives only here; releases are tagged v<version> (docs/kit/build.md#versioning).
 project(asio_comm

@@ -51,7 +51,7 @@ to clear both the main build and the nested integration-test builds that cache t
 | Ubuntu | 26.04 LTS | development and CI operating system |
 | GCC | 16 (`g++-16`); installed compiler reports 16.0.1, experimental snapshot 20260322, package `16-20260322-1ubuntu1` | the main compiler |
 | Clang tools | 22 (`clang++-22`, `clangd-22`, `clang-tidy-22`, `clang-scan-deps-22`, `clang-format-22`); Ubuntu packages `clang-22`, `clang-tools-22`, `clang-tidy-22`, `clang-format-22`, `clangd-22` | second compiler, sanitizers, IDE, checks |
-| CMake | 3.30 or newer; 4.4.4 from Kitware's apt repository, locally and in CI | build |
+| CMake | 4.4.x for `import std`; 4.4.4 from Kitware's apt repository, locally and in CI | build |
 | Ninja | 1.11 or newer | generator (Makefiles can't build modules) |
 | Python | 3.10 or newer; 3.14.4 locally | repository scripts use the standard library; optional wheel builds use the separate environment below |
 | Catch2 | 3.16.1, built from source into `/usr/local`, locally and in CI | tests |
@@ -227,8 +227,10 @@ once. In VS Code, use the clangd extension with `"clangd.path": "/usr/bin/clangd
 
 `cmake/kit/` is shared by every repo and owned by the template (change it in `cmake_template`, then
 run `tools/kit/sync_template.py` in the other repos). The top-level `CMakeLists.txt` includes
-`cmake/kit/nom_kit.cmake`, which sets C++23 without compiler extensions. This remains the single
-entry point: `api/` contains the helpers used by repositories, `deps/` contains dependency
+`cmake/kit/std_modules.cmake` before `project()` to enable standard-library module detection,
+then `cmake/kit/nom_kit.cmake` after it to set C++23 without compiler extensions and load the
+kit. The pre-project entry point is also needed by outer source/package consumers.
+`api/` contains the helpers used by repositories, `deps/` contains dependency
 services, `internal/` contains implementation helpers, and `templates/` contains generic package
 metadata templates. See the [kit overview](../../cmake/kit/README.md) for short examples.
 
@@ -236,6 +238,7 @@ The entry point provides:
 
 | Function | What it does |
 |---|---|
+| `nom_enable_std_modules(<target>)` | Enable C++23 standard-library modules on an existing compiled target; validate toolchain support and restrict Clang's reserved-module-name warning exception to vendor sources. |
 | `nom_project_options()` | The project's options (below). Call it right after `project()`. |
 | `nom_lib(<name> [STATIC \| SHARED] [SOURCES …] [HEADERS …] [MODULES …] [BASE_DIR <dir>] [PUBLIC_DEPS …] [PRIVATE_DEPS …] [COMPILE_OPTIONS …])` | Library `<name>` plus alias `nom::<name>`. `MODULES` lists native interfaces and partitions; `SOURCES` lists implementation units and other compiled sources. File sets are rooted at `BASE_DIR` (default `core/`). Header-only macro or dependency adapters can be INTERFACE targets. Compile options are PRIVATE for compiled libraries and INTERFACE otherwise. |
 | `nom_app(<name> SOURCES … [DEPS …] [BUILD_FOR …] [COMPILE_OPTIONS …])` | Executable target `<name>` (unique across the whole build), binary `bin/<name>`; selects default build/install participation by preset; collects an adjacent `config/` directory. Compile options are PRIVATE. |
@@ -339,13 +342,53 @@ Use `MODULES` in `nom_lib()` to declare interfaces and partitions, including for
 consisting entirely of templates. The [module recipe](howto.md#a-module) shows the CMake and
 source layout.
 
+Standard-library modules use CMake 4.4.x, Ninja, GCC 16 or Clang 22, and installed standard-library
+module sources (the current Linux toolchain uses libstdc++ 16). Enable detection before the first
+`project()` that enables CXX, then opt in each compiled target that imports `std` or consumes a
+module that does:
+
+```cmake
+cmake_minimum_required(VERSION 4.4)
+include(cmake/kit/std_modules.cmake)
+project(prices LANGUAGES CXX)
+include(cmake/kit/nom_kit.cmake)
+nom_project_options()
+
+nom_lib(prices MODULES prices.cppm)
+nom_enable_std_modules(prices)
+```
+
+`nom_enable_std_modules()` checks `CMAKE_CXX_COMPILER_IMPORT_STD` for C++23 and sets
+`CXX_MODULE_STD ON`. It does not enable the feature globally on third-party targets. Keep guards
+around calls for optional apps, tests or Python extensions when their targets may be absent.
+For Clang, only the vendor's `std`/`std.compat` sources receive
+`-Wno-reserved-module-identifier`; project warning settings remain intact.
+
+The experimental gate in `std_modules.cmake` is specific to CMake 4.4. Other CMake series need
+validation and an updated configuration; the helper rejects them instead of silently using a
+stale gate. When adopting this in an existing build, reconfigure from a fresh build directory
+so CXX toolchain detection runs with the gate enabled.
+
+Source consumers must include the entry point before their outer `project()`; loading it from
+a dependency is too late. Installed-package consumers without the kit must enable CMake 4.4's
+`CMAKE_EXPERIMENTAL_CXX_IMPORT_STD` gate (`f35a9ac6-8463-4d38-8eec-5d6008153e7d`) before `project()`,
+set C++23, check `CMAKE_CXX_COMPILER_IMPORT_STD`, and set `CXX_MODULE_STD ON` on their consuming
+targets. The library usage fixture demonstrates both paths using the kit helper.
+
+CMake discovers vendor module sources through the toolchain metadata and builds compatible
+compiled module interfaces before their importers. These are compiler/flag-specific build
+artifacts, not checked-in binaries or a replacement for linking the standard runtime library.
+`tests/kit/std_modules/` checks standard types across a module implementation boundary and a
+template instantiated by a Catch2 consumer; the existing source/package integration tests also
+exercise the migrated example library.
+
 Headers still have specific roles at the boundaries:
 
 - Macros cannot be exported. Keep them in ordinary headers and include them before imports;
   Catch2 tests follow the same rule for their assertion macros.
-- Include the standard-library headers each file uses (for example `<string>` to compare
-  `std::string`s). A module's global module fragment does not make those declarations visible
-  to importers. `import std;` needs separate toolchain validation.
+- Import `std` in each file that uses standard-library declarations. An ordinary `import std;`
+  in a library does not re-export those names to its consumers. Standard macros still require
+  their headers (for example `<cassert>` for `assert`); keep macro headers self-contained.
 - Third-party libraries without suitable module support can be included in a global module
   fragment, wrapped behind a module API, or used through headers by consumers that need them.
   Choose the boundary for the dependency and test it on the supported compilers. Keep our

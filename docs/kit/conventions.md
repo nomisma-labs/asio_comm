@@ -62,9 +62,12 @@ namespace hierarchy:
 `nom.assembly` can export names directly in `nom`.
 
 Macros stay in headers. Third-party dependencies can be included in a global module fragment,
-hidden behind a module API, or consumed through their headers when needed. Include the standard
-library headers each file uses; `import std;` is a separate toolchain investigation.
-See [build.md](build.md#modules).
+hidden behind a module API, or consumed through their headers when needed. Use `import std;`
+in each file that uses standard-library declarations. Keep macro-bearing standard headers
+(such as `<cassert>`) and third-party includes before imports, in the global module fragment
+for module units. Enable standard-library module detection before `project()` and opt each
+compiled consumer target in with `nom_enable_std_modules(target)`.
+See [build.md](build.md#modules) for the supported toolchain and consumer setup.
 
 ## CMake names
 

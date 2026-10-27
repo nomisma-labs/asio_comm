@@ -4,7 +4,7 @@
 # Nomisma CMake kit. Template-owned: change it in cmake_template, then pull the change into
 # derived repos with tools/kit/sync_template.py. Reference: docs/kit/build.md.
 
-set(_nom_kit_version 0.11.1)
+set(_nom_kit_version 0.11.2)
 
 # The same language flags everywhere: compiled module interfaces are flag-sensitive.
 if(NOT DEFINED CMAKE_CXX_STANDARD)
@@ -26,6 +26,9 @@ if(_nom_kit_loaded)
     return()
 endif()
 set_property(GLOBAL PROPERTY NOM_KIT_VERSION ${_nom_kit_version})
+
+# The pre-project entry point also supplies the per-target import std helper.
+include(${CMAKE_CURRENT_LIST_DIR}/std_modules.cmake)
 
 # Client-facing project, target, testing, installation and Python helpers.
 include(${CMAKE_CURRENT_LIST_DIR}/api/project.cmake)
