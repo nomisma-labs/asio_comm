@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 Alexey Tkachenko
+# SPDX-License-Identifier: LicenseRef-Nomisma-Labs-Proprietary
+#
+# Template-owned. Git runs this before each commit once ./bootstrap.sh has pointed core.hooksPath
+# at tools/kit/hooks. It checks the staged copy of each staged file, the content the commit gets,
+# with the checks CI runs over the whole repo. Naming needs a build, so it stays in bootstrap and
+# CI. Reference: docs/kit/build.md#git-hooks.
+set -uo pipefail
+cd "$(git rev-parse --show-toplevel)" || exit 1
+
+failed=()
+check() {
+    local label=$1
+    shift
+    "$@" || failed+=("$label")
+}
+
+# Markdown may end a line with spaces on purpose (.editorconfig keeps them).
+check 'whitespace' git diff --cached --check -- . ':!*.md'
+check 'formatting' tools/kit/checks/format.sh --staged
+check 'SPDX headers' python3 tools/kit/checks/headers.py --staged
+
+if (( ${#failed[@]} )); then
+    printf -v list '%s, ' "${failed[@]}"
+    printf '\nCommit stopped by tools/kit/hooks/pre-commit (%s): fix the staged files and commit again.\n' \
+        "${list%, }" >&2
+    exit 1
+fi

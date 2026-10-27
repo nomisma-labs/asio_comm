@@ -1,0 +1,15 @@
+# SPDX-FileCopyrightText: 2026 Alexey Tkachenko
+# SPDX-License-Identifier: LicenseRef-Nomisma-Labs-Proprietary
+# Optional wheel build/test environment. Install inside a virtual environment.
+# Keep the backend pin in example/recipe pyproject.toml declarations in sync.
+pip==25.1.1
+build==1.3.0
+scikit-build-core==0.11.6
+packaging==25.0
+pathspec==0.12.1
+pyproject-hooks==1.2.0
+tomli==2.2.1; python_version < "3.11"
+exceptiongroup==1.3.0; python_version < "3.11"
+typing-extensions==4.14.1; python_version < "3.11"
+importlib-metadata==8.7.0; python_full_version < "3.10.2"
+zipp==3.23.0; python_full_version < "3.10.2"

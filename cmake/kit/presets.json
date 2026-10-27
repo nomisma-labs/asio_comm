@@ -1,0 +1,134 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": { "major": 3, "minor": 30, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": { "CMAKE_EXPORT_COMPILE_COMMANDS": "ON" }
+    },
+    {
+      "name": "dev",
+      "displayName": "GCC 16, Debug, fast tests (no integration or kit tests)",
+      "inherits": "base",
+      "cacheVariables": {
+        "CMAKE_CXX_COMPILER": "g++-16",
+        "CMAKE_BUILD_TYPE": "Debug",
+        "NOM_BUILD_PRESET": "dev",
+        "NOM_SKIP_TEST_LABELS": "integration;kit"
+      }
+    },
+    {
+      "name": "complete",
+      "displayName": "GCC 16, Debug, every app including experiments, every test",
+      "inherits": "dev",
+      "cacheVariables": { "NOM_BUILD_PRESET": "complete", "NOM_SKIP_TEST_LABELS": "" }
+    },
+    {
+      "name": "release",
+      "displayName": "GCC 16, Release",
+      "inherits": "base",
+      "cacheVariables": { "CMAKE_CXX_COMPILER": "g++-16", "CMAKE_BUILD_TYPE": "Release", "NOM_BUILD_PRESET": "release" }
+    },
+    {
+      "name": "clang",
+      "displayName": "Clang 22, Debug (compilation database for clangd and clang-tidy)",
+      "inherits": "base",
+      "cacheVariables": { "CMAKE_CXX_COMPILER": "clang++-22", "CMAKE_BUILD_TYPE": "Debug", "NOM_BUILD_PRESET": "clang" }
+    },
+    {
+      "name": "asan",
+      "displayName": "Clang 22, Debug, AddressSanitizer + UBSan",
+      "inherits": "clang",
+      "cacheVariables": {
+        "NOM_BUILD_PRESET": "asan",
+        "CMAKE_CXX_FLAGS": "-fsanitize=address,undefined -fno-sanitize-recover=undefined -fno-omit-frame-pointer"
+      }
+    },
+    {
+      "name": "ci",
+      "displayName": "GCC 16, RelWithDebInfo, warnings as errors",
+      "inherits": "base",
+      "cacheVariables": {
+        "CMAKE_CXX_COMPILER": "g++-16",
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "CMAKE_COMPILE_WARNING_AS_ERROR": "ON",
+        "NOM_BUILD_PRESET": "ci"
+      }
+    }
+  ],
+  "buildPresets": [
+    { "name": "dev", "configurePreset": "dev" },
+    { "name": "complete", "configurePreset": "complete" },
+    { "name": "release", "configurePreset": "release" },
+    { "name": "asan", "configurePreset": "asan" },
+    { "name": "clang", "configurePreset": "clang" },
+    { "name": "ci", "configurePreset": "ci" }
+  ],
+  "testPresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "output": { "outputOnFailure": true },
+      "environment": { "CTEST_PARALLEL_LEVEL": "" }
+    },
+    { "name": "dev", "inherits": "base", "configurePreset": "dev" },
+    { "name": "complete", "inherits": "base", "configurePreset": "complete" },
+    { "name": "release", "inherits": "base", "configurePreset": "release" },
+    { "name": "asan", "inherits": "base", "configurePreset": "asan" },
+    { "name": "clang", "inherits": "base", "configurePreset": "clang" },
+    { "name": "ci", "inherits": "base", "configurePreset": "ci" }
+  ],
+  "workflowPresets": [
+    {
+      "name": "complete",
+      "steps": [
+        { "type": "configure", "name": "complete" },
+        { "type": "build", "name": "complete" },
+        { "type": "test", "name": "complete" }
+      ]
+    },
+    {
+      "name": "dev",
+      "steps": [
+        { "type": "configure", "name": "dev" },
+        { "type": "build", "name": "dev" },
+        { "type": "test", "name": "dev" }
+      ]
+    },
+    {
+      "name": "release",
+      "steps": [
+        { "type": "configure", "name": "release" },
+        { "type": "build", "name": "release" },
+        { "type": "test", "name": "release" }
+      ]
+    },
+    {
+      "name": "asan",
+      "steps": [
+        { "type": "configure", "name": "asan" },
+        { "type": "build", "name": "asan" },
+        { "type": "test", "name": "asan" }
+      ]
+    },
+    {
+      "name": "clang",
+      "steps": [
+        { "type": "configure", "name": "clang" },
+        { "type": "build", "name": "clang" },
+        { "type": "test", "name": "clang" }
+      ]
+    },
+    {
+      "name": "ci",
+      "steps": [
+        { "type": "configure", "name": "ci" },
+        { "type": "build", "name": "ci" },
+        { "type": "test", "name": "ci" }
+      ]
+    }
+  ]
+}

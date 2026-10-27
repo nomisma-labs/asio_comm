@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 Alexey Tkachenko
+# SPDX-License-Identifier: LicenseRef-Nomisma-Labs-Proprietary
+#
+# Template-owned. Git runs this on each commit message once ./bootstrap.sh has pointed
+# core.hooksPath at tools/kit/hooks. Commit messages here carry no Co-Authored-By trailers.
+# Reference: docs/kit/build.md#git-hooks.
+set -uo pipefail
+
+if grep -qi '^co-authored-by:' "$1"; then
+    printf 'Commit stopped by tools/kit/hooks/commit-msg: remove the Co-Authored-By line; commit messages here carry none.\n' >&2
+    exit 1
+fi

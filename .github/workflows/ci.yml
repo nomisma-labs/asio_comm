@@ -1,0 +1,55 @@
+# SPDX-FileCopyrightText: 2026 Alexey Tkachenko
+# SPDX-License-Identifier: LicenseRef-Nomisma-Labs-Proprietary
+#
+# Template-owned. Jobs run in the CI image that cmake_template's ci_image.yml publishes.
+name: ci
+
+on:
+  push:
+    branches: [master]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: build and test (${{ matrix.preset }})
+    runs-on: ubuntu-26.04
+    container: ghcr.io/${{ github.repository_owner }}/ci:latest
+    strategy:
+      fail-fast: false
+      matrix:
+        preset: [ci]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+      - name: Configure, build, test
+        run: cmake --workflow --preset ${{ matrix.preset }}
+
+  checks:
+    name: headers, format, naming
+    runs-on: ubuntu-26.04
+    container: ghcr.io/${{ github.repository_owner }}/ci:latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+      # The checkout belongs to another user inside the container; the checks call git.
+      - run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - run: python3 tools/kit/checks/python.py
+      - run: python3 tools/kit/checks/headers.py
+      - run: tools/kit/checks/format.sh
+      - run: tools/kit/checks/naming.sh
+
+  version:
+    name: release tag matches project()
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-26.04
+    steps:
+      - uses: actions/checkout@v7
+      - run: python3 tools/kit/checks/version.py "$GITHUB_REF_NAME"

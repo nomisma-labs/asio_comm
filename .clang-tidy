@@ -1,0 +1,31 @@
+# SPDX-FileCopyrightText: 2026 Alexey Tkachenko
+# SPDX-License-Identifier: LicenseRef-Nomisma-Labs-Proprietary
+#
+# Naming convention check (docs/kit/conventions.md). Run: tools/kit/checks/naming.sh
+Checks: '-*,readability-identifier-naming'
+WarningsAsErrors: 'readability-identifier-naming'
+HeaderFilterRegex: '/(core|apps|tests)/'
+CheckOptions:
+  readability-identifier-naming.NamespaceCase:                 lower_case
+  readability-identifier-naming.ClassCase:                     lower_case
+  readability-identifier-naming.StructCase:                    lower_case
+  readability-identifier-naming.UnionCase:                     lower_case
+  readability-identifier-naming.EnumCase:                      lower_case
+  readability-identifier-naming.EnumConstantCase:              lower_case
+  readability-identifier-naming.TypeAliasCase:                 lower_case
+  readability-identifier-naming.TypedefCase:                   lower_case
+  readability-identifier-naming.ConceptCase:                   lower_case
+  readability-identifier-naming.FunctionCase:                  lower_case
+  readability-identifier-naming.MethodCase:                    lower_case
+  readability-identifier-naming.VariableCase:                  lower_case
+  readability-identifier-naming.ParameterCase:                 lower_case
+  readability-identifier-naming.MemberCase:                    lower_case
+  readability-identifier-naming.PrivateMemberSuffix:           '_'
+  readability-identifier-naming.ProtectedMemberSuffix:         '_'
+  readability-identifier-naming.ConstexprVariableCase:         lower_case
+  readability-identifier-naming.GlobalConstantCase:            lower_case
+  readability-identifier-naming.TemplateParameterCase:         CamelCase
+  readability-identifier-naming.TypeTemplateParameterCase:     CamelCase
+  readability-identifier-naming.ValueTemplateParameterCase:    CamelCase
+  readability-identifier-naming.TemplateTemplateParameterCase: CamelCase
+  readability-identifier-naming.MacroDefinitionCase:           UPPER_CASE
