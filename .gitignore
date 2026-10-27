@@ -6,7 +6,3 @@ __pycache__/
 *.pyc
 # Sandbox experiments stay in the clone; apps/sandbox/CMakeLists.txt builds whichever exist.
 /apps/sandbox/*/
-# template-only:begin
-# The lab keeps the experiments its findings cite (docs/lab/README.md).
-!/apps/sandbox/native_module/
-# template-only:end

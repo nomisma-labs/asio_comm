@@ -2,5 +2,3 @@
 # SPDX-License-Identifier: LicenseRef-Nomisma-Labs-Proprietary
 #
 # One subdirectory per library (docs/kit/howto.md#a-library).
-
-add_subdirectory(example) # template-only
