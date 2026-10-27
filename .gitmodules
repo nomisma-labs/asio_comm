@@ -1,0 +1,12 @@
+[submodule "external/base"]
+	path = external/base
+	url = ../base.git
+[submodule "external/json_config"]
+	path = external/json_config
+	url = ../json_config.git
+[submodule "external/spd_logger"]
+	path = external/spd_logger
+	url = ../spd_logger.git
+[submodule "external/assembly"]
+	path = external/assembly
+	url = ../assembly.git
