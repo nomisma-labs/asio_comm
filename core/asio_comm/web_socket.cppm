@@ -88,6 +88,14 @@ export namespace nom
             std::string value;
         };
 
+        /*TODO: review params
+        1. Understand different types of pings and why do we need enable_outbound_ping)
+        2. Review idle timer and test it properly (perhaps you need to set up your own websocket server)
+        3. Review async operation timeouts - reproduce a case when it's triggered
+        4. Test send and recv really big messages (example - coinbase sends huge initial snapshot that doesn't fit
+        default recv buffer)
+         */
+
         std::vector<header> headers{};
         bool enable_outbound_ping{false};
 
@@ -107,7 +115,23 @@ export namespace nom
         };
     } // namespace detail
 
+    /* TODO: update statuses
+    1. Introduce init (a session should start in init, not in disconnected)
+    2. Rename failed -> conn_failed
+    3. Make conn_failed terminal - on the same level as disconnected
+    4. Any terminal state (disconnected, conn_failed) should be also "detached" from parent
+    */
     NOM_ENUM(ws_status, std::uint8_t, disconnected, connecting, connected, disconnecting, failed)
+
+    /* TODO:
+        Ensure connection stability - create test apps that reproduces various cases of connection loss:
+        1. hard disconnection (unplug network cable)
+        2. docker based interface disconnection (apparently "soft" disconnection of virtual interface may be only caught
+       by idle timer)
+        3. "normal" server disconnection (e.g. Binance resets MD connection once per day)
+
+        Consider making noexcept interface (for everything except constructor)
+    */
 
     class web_socket
     {
@@ -120,8 +144,14 @@ export namespace nom
                                                            const event::network_error&>::type;
 
         web_socket(net::any_io_executor executor, const ::nom::url& address);
-        web_socket(net::any_io_executor executor, std::string_view host, std::uint16_t port, std::string_view target);
-        ~web_socket();
+        web_socket(net::any_io_executor executor, std::string_view host, std::uint16_t port, std::string_view target)
+            : web_socket(executor, ::nom::url("wss", host, port, target))
+        {
+        }
+        ~web_socket()
+        {
+            close();
+        }
 
         web_socket(const web_socket&) = delete;
         web_socket& operator=(const web_socket&) = delete;
@@ -261,6 +291,11 @@ namespace nom
             return status_;
         }
 
+        /*TODO: improve connection
+            1. Dispose the state that is required only for connection procedure after connection is established (e.g.
+           resolver)
+            2. Test various connection option (different TLS levels, no SSL?)
+        */
         void connect()
         {
             switch (status_)
@@ -893,6 +928,11 @@ namespace nom
         boost::asio::steady_timer ping_timer_;
     };
 
+    /*TODO:
+        1. Always create a session, so web_socket::send (and others) do not need to check for valid session_ pointer
+        2. Consider enabling move copy/assignment for web_socket (I don't see the reason why it's disabled)
+        3. I wonder why ssl_ctx_ is on web_socket level (it might be moved to session)?
+     */
     web_socket::web_socket(net::any_io_executor executor, const ::nom::url& address)
         : executor_(executor), url_(address)
     {
@@ -900,20 +940,6 @@ namespace nom
             throw std::invalid_argument("Wrong web_socket URL scheme (expected wss://): " + url_.scheme());
         ssl_ctx_.set_default_verify_paths();
         ssl_ctx_.set_verify_mode(ssl::verify_peer);
-    }
-
-    web_socket::web_socket(net::any_io_executor executor,
-                           std::string_view host,
-                           std::uint16_t port,
-                           std::string_view target)
-        : web_socket(executor, ::nom::url("wss", host, port, target))
-    {
-    }
-
-    web_socket::~web_socket()
-    {
-        // Pending handlers own the session, but must never dereference a destroyed owner.
-        close();
     }
 
     void web_socket::connect(const delegate& callbacks)
