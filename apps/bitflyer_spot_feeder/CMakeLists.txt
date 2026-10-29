@@ -4,4 +4,4 @@
 nom_app(bitflyer_spot_feeder
     IMPORT_STD
     SOURCES main.cpp
-    DEPS nom::asio_comm nom::spd_logger)
+    DEPS nom::asio_comm nom::assembly nom::spd_logger)

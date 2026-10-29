@@ -54,6 +54,23 @@ does not parse messages, confirm subscription success, store data separately, or
 order book from depth updates. See the [WebSocket constraints](../../docs/web_socket.md#usage-constraints-and-deferred-work)
 for the client's current execution and lifetime contract.
 
+## Assembly structure
+
+`binance_spot_assembly` in [main.cpp](main.cpp) composes three nodes:
+
+- `asio_service` contributes the shared `io_context` through its `context_mixin`.
+- `market_data_logger` handles `nom::event::market_data` responses and logs the payload.
+- `binance_spot_client` handles `nom::event::service_command` requests, owns the WebSocket
+  connections and timers, and adapts WebSocket callbacks into market-data responses.
+
+`app` derives from `nom::relay<binance_spot_assembly>`. Its `start()` sends the start command
+through the relay and runs the context. The client sends each received payload back through
+`pass_response()` to the logger. Stop commands cancel timers and close the connections.
+
+Relay delivery is synchronous on the same thread as the WebSocket callbacks. Market-data events
+borrow their source and payload views only for that call; no payload copy or queue is introduced.
+The assembly context outlives its nodes, and the app stays alive while the context runs.
+
 ## Validation
 
 The local TLS integration test checks default and multi-symbol subscriptions, channel selection,

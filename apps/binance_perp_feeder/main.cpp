@@ -6,11 +6,30 @@
 #include <cstdio>
 #endif
 
+#include <cassert>
 #include <spd_logger/logging.h>
 
 import std;
 import nom.asio_comm;
+import nom.assembly;
 import nom.spd_logger;
+
+namespace nom::event
+{
+    enum class service_command
+    {
+        start,
+        stop
+    };
+
+    // Borrowed views are consumed synchronously by the relay before the WebSocket callback returns.
+    struct market_data
+    {
+        network_timestamp ts;
+        std::string_view source;
+        std::string_view data;
+    };
+} // namespace nom::event
 
 namespace
 {
@@ -124,6 +143,133 @@ namespace
         nom::web_socket client;
         std::string request;
     };
+
+    template <typename Traits> struct asio_service
+    {
+        struct context_mixin
+        {
+            // The assembly constructs context services before nodes and destroys them after nodes.
+            nom::asio::io_context io;
+        };
+    };
+
+    template <typename Traits> struct market_data_logger
+    {
+        void on_response(const nom::event::market_data& event)
+        {
+            LINFO("{} {}", event.source, event.data);
+        }
+    };
+
+    template <typename Traits> class binance_perp_client
+    {
+    public:
+        explicit binance_perp_client(const app_config& config) : connect_deadline_(nom::ctx(this).io)
+        {
+            for (const auto& selected : make_subscriptions(config))
+            {
+                if (!selected.streams.empty())
+                    feeds_.push_back(std::make_unique<feed>(nom::ctx(this).io.get_executor(), selected));
+            }
+        }
+
+        void on_request(nom::event::service_command command)
+        {
+            switch (command)
+            {
+            case nom::event::service_command::start:
+            {
+                running_ = true;
+                pending_connections_ = feeds_.size();
+                connect_deadline_.expires_after(std::chrono::seconds(30));
+                connect_deadline_.async_wait(
+                    [this](const nom::asio::error_code& error)
+                    {
+                        if (!error)
+                        {
+                            LERROR("Connection setup timed out");
+                            on_request(nom::event::service_command::stop);
+                        }
+                    });
+                for (const auto& current : feeds_)
+                {
+                    // A synchronous setup failure can stop the whole feeder during connect().
+                    if (!running_)
+                        break;
+                    LINFO("Connecting to {}", current->client.url().target());
+                    current->client.connect(nom::web_socket::delegate{std::ref(*this)});
+                }
+                break;
+            }
+            case nom::event::service_command::stop:
+                running_ = false;
+                connect_deadline_.cancel();
+                for (const auto& current : feeds_)
+                    current->client.close();
+                break;
+            }
+        }
+
+        void operator()(nom::web_socket& connection, const nom::event::on_connected&)
+        {
+            if (--pending_connections_ == 0)
+                connect_deadline_.cancel();
+            LINFO("Connected: {}", connection.session_id());
+            const auto selected =
+                std::ranges::find_if(feeds_, [&](const auto& current) { return &current->client == &connection; });
+            assert(selected != feeds_.end());
+            LINFO("{} Subscribing: {}", connection.session_id(), (*selected)->request);
+            if (!connection.send((*selected)->request))
+            {
+                LERROR("{} Subscription send failed", connection.session_id());
+                on_request(nom::event::service_command::stop);
+            }
+        }
+
+        void operator()(nom::web_socket& connection, const nom::event::ws_data& event)
+        {
+            nom::relay<Traits>::pass_response(
+                this,
+                nom::event::market_data{.ts = event.ts, .source = connection.session_id(), .data = event.sv_data()});
+        }
+
+        void operator()(nom::web_socket& connection, const nom::event::on_disconnected& event)
+        {
+            LWARN("{} Disconnected: {}", connection.session_id(), event.reason);
+            on_request(nom::event::service_command::stop);
+        }
+
+        void operator()(nom::web_socket& connection, const nom::event::network_error& event)
+        {
+            LERROR("{} {}: {}", connection.session_id(), event.description, event.message);
+            on_request(nom::event::service_command::stop);
+        }
+
+    private:
+        std::vector<std::unique_ptr<feed>> feeds_;
+        nom::asio::steady_timer connect_deadline_;
+        std::size_t pending_connections_{};
+        bool running_{false};
+    };
+
+    struct binance_perp_assembly
+        : nom::assembly<binance_perp_assembly, asio_service, market_data_logger, binance_perp_client>
+    {
+    };
+
+    struct app : nom::relay<binance_perp_assembly>
+    {
+        explicit app(const app_config& config) : nom::relay<binance_perp_assembly>(config)
+        {
+        }
+
+        void start()
+        {
+            request(nom::event::service_command::start);
+            // Relay calls and all WebSocket callbacks stay on this one io_context thread.
+            ctx().io.run();
+        }
+    };
 } // namespace
 
 int main(int argc, char** argv)
@@ -142,75 +288,10 @@ int main(int argc, char** argv)
     try
     {
         const auto config = parse_arguments(argc, argv);
-        const auto subscriptions = make_subscriptions(config);
         nom::init_logger(nom::main_logger, config.log);
-        nom::asio::io_context io;
-        std::vector<std::unique_ptr<feed>> feeds;
-        for (const auto& selected : subscriptions)
-        {
-            if (!selected.streams.empty())
-                feeds.push_back(std::make_unique<feed>(io.get_executor(), selected));
-        }
-
-        nom::asio::steady_timer connect_deadline(io, std::chrono::seconds(30));
-        std::size_t pending_connections = feeds.size();
-        const auto finish = [&]
-        {
-            connect_deadline.cancel();
-            for (const auto& current : feeds)
-                current->client.close();
-        };
-        connect_deadline.async_wait(
-            [&](const nom::asio::error_code& error)
-            {
-                if (!error)
-                {
-                    LERROR("Connection setup timed out");
-                    finish();
-                }
-            });
-
-        // Both routes share one io_context thread; calls and callbacks are serialized.
-        for (const auto& current : feeds)
-        {
-            LINFO("Connecting to {}", current->client.url().target());
-            const auto on_event = [&, selected = current.get()](nom::web_socket& connection, const auto& event)
-            {
-                using event_type = std::remove_cvref_t<decltype(event)>;
-                if constexpr (std::same_as<event_type, nom::event::on_connected>)
-                {
-                    if (--pending_connections == 0)
-                        connect_deadline.cancel();
-                    LINFO("Connected: {}", connection.session_id());
-                    LINFO("{} Subscribing: {}", connection.session_id(), selected->request);
-                    if (!connection.send(selected->request))
-                    {
-                        LERROR("{} Subscription send failed", connection.session_id());
-                        finish();
-                    }
-                }
-                else if constexpr (std::same_as<event_type, nom::event::ws_data>)
-                {
-                    // The logger consumes the borrowed payload before this callback returns.
-                    LINFO("{} {}", connection.session_id(), event.sv_data());
-                }
-                else if constexpr (std::same_as<event_type, nom::event::on_disconnected>)
-                {
-                    LWARN("{} Disconnected: {}", connection.session_id(), event.reason);
-                    finish();
-                }
-                else if constexpr (std::same_as<event_type, nom::event::network_error>)
-                {
-                    LERROR("{} {}: {}", connection.session_id(), event.description, event.message);
-                    finish();
-                }
-            };
-            current->client.connect(nom::web_socket::delegate{on_event});
-        }
-
-        io.run();
+        app(config).start();
         nom::flush_logger(nom::main_logger);
-        return 1; // Any ended connection interrupts the selected feed.
+        return 1; // An ended connection interrupts this continuous feed.
     }
     catch (const std::exception& error)
     {
