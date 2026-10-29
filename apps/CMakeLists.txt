@@ -5,4 +5,9 @@
 
 add_subdirectory(asio_comm_example)
 add_subdirectory(web_socket_example)
+add_subdirectory(binance_spot_feeder)
+add_subdirectory(binance_perp_feeder)
+add_subdirectory(bitflyer_spot_feeder)
+add_subdirectory(deribit_perp_feeder)
+add_subdirectory(okex_spot_feeder)
 add_subdirectory(sandbox)

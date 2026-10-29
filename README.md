@@ -3,8 +3,7 @@
 <!-- repo-description:begin -->
 `asio_comm` will provide C++ implementations of WebSocket, HTTP and other communication
 protocols, initially for connectivity to cryptocurrency exchanges. The repository contains an
-initial TLS WebSocket client, a minimal WebSocket example, and a logging/relay
-workflow example.
+initial TLS WebSocket client, public exchange market-data feeders, and WebSocket and logging/relay examples.
 <!-- repo-description:end -->
 
 ## Components
@@ -14,6 +13,14 @@ workflow example.
 
 ## Example applications
 
+- [Binance Spot feeder](apps/binance_spot_feeder/README.md): subscribe to ticker, trade and depth
+  streams for selected symbols and log incoming messages.
+- [Binance perpetual futures feeder](apps/binance_perp_feeder/README.md): log USDⓈ-M ticker,
+  aggregate trade and depth streams through Binance's routed endpoints.
+- [Bitflyer Spot feeder](apps/bitflyer_spot_feeder/README.md): log ticker, executions and board data.
+- [Deribit perpetual futures feeder](apps/deribit_perp_feeder/README.md): log public ticker,
+  trades and order-book updates.
+- [OKX Spot feeder](apps/okex_spot_feeder/README.md): log ticker, trades and depth with text heartbeats.
 - [WebSocket example](apps/web_socket_example/README.md): connect, send a message and print a reply;
   includes client setup and parameter examples.
 - [Logging and relay example](apps/asio_comm_example/README.md): configure logging in C++
