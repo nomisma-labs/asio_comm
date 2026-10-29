@@ -69,8 +69,10 @@ a Python package, a dependency, an experiment.
   Keep macros in headers, and use wrappers or headers at third-party boundaries.
   Use `import std;` for standard-library declarations. Put macro-bearing and third-party
   `#include`s before imports (in a global module fragment for module units). Enable each
-  consuming compiled target with `nom_enable_std_modules(target)`; keep guards when an
-  optional target may not exist. Source/package consumers must enable detection before their
+  consuming compiled target with `IMPORT_STD` in its kit helper call (`nom_lib`, `nom_app`,
+  `nom_c2test`, or `nom_python_module`). Helpers handle disabled targets internally. Use
+  `nom_enable_std_modules(target)` directly for targets created outside the kit, guarding
+  optional targets when needed. Source/package consumers must enable detection before their
   own `project()` too ([build.md](build.md#modules)).
 - The version lives only in `project()`; releases follow [build.md](build.md#versioning).
 - When you change behaviour that a doc describes, update the doc in the same change.

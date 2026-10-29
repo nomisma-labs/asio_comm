@@ -20,7 +20,7 @@ uses `find_package(cmake_template)` and links `nom::example`.
    (`<file>.cpp`). The [module recipe](#a-module) shows the source layout.
 2. Add `core/<repo>/CMakeLists.txt`:
    ```cmake
-   nom_lib(<repo>
+   nom_lib(<repo> IMPORT_STD
        MODULES <repo>.cppm thing.cppm
        SOURCES thing.cpp
        HEADERS macros.h         # only when the library needs public macros
@@ -85,10 +85,10 @@ module declaration; apps and tests consume them with `import nom.<repo>;`.
 4. Register the interfaces and partitions unconditionally in `MODULES`, and implementation
    units in `SOURCES`:
    ```cmake
-   nom_lib(<repo> MODULES <repo>.cppm thing.cppm SOURCES thing.cpp)
+   nom_lib(<repo> IMPORT_STD MODULES <repo>.cppm thing.cppm SOURCES thing.cpp)
    ```
 5. Put `import std;` after the named module declaration when using standard-library facilities,
-   and call `nom_enable_std_modules(<repo>)` after creating the target. Enable the pre-project
+   and pass `IMPORT_STD` to the target helper. Enable the pre-project
    setup described in [build.md](build.md#modules). For macro-bearing or third-party includes,
    start with a global module fragment (`module;`, then the includes). Keep dependencies
    private when the API does not need their types: `core/example/settings.cpp` includes nlohmann
@@ -102,14 +102,14 @@ More rules and dependency boundaries: [build.md](build.md#modules).
 1. Put `main.cpp` in `apps/<app>/`; import the Nomisma libraries it uses.
 2. Add `apps/<app>/CMakeLists.txt`:
    ```cmake
-   nom_app(<app> SOURCES main.cpp DEPS nom::<repo>)
+   nom_app(<app> IMPORT_STD SOURCES main.cpp DEPS nom::<repo>)
    ```
    When `nom_build_apps` is OFF, the helper creates no target or config collection rules.
    The target is `<app>`; the binary is `build/<preset>/bin/<app>`. Choose a target name unique
    across the whole build, including enabled dependency apps. By default it joins
    every preset (`BUILD_FOR any`). Restrict its normal build and installation with:
    ```cmake
-   nom_app(<app> SOURCES main.cpp DEPS nom::<repo> BUILD_FOR dev ci)
+   nom_app(<app> IMPORT_STD SOURCES main.cpp DEPS nom::<repo> BUILD_FOR dev ci)
    ```
    Other presets can still build it explicitly by target name. The `complete` preset includes every
    app regardless of this list. Use `BUILD_FOR complete` for prototypes. Apply further target
@@ -145,7 +145,7 @@ More rules and dependency boundaries: [build.md](build.md#modules).
    ```
 2. Give the folder a `CMakeLists.txt` with one executable:
    ```cmake
-   nom_c2test(tests SOURCES file_test.cxx DEPS nom::<repo>)
+   nom_c2test(tests IMPORT_STD SOURCES file_test.cxx DEPS nom::<repo>)
    ```
    `nom_c2test(<suite> …)` builds `<repo>_<suite>`, registers it with CTest and labels it `unit`;
    each folder needs its own suite name (`tests`, `relay_tests`, …). `LABELS` replaces the label,
@@ -220,7 +220,7 @@ and packaging tools. Packaging does not choose or generate the Python API.
    ```
 3. Add `python/CMakeLists.txt`, using a shared library target in this example:
    ```cmake
-   nom_python_module(<repo>_python
+   nom_python_module(<repo>_python IMPORT_STD
        MODULE_NAME _native
        PACKAGE <package>
        SOURCES native.cpp

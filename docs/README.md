@@ -2,3 +2,8 @@
 
 - [kit/](kit/README.md): the docs every Nomisma repo shares: build, conventions, recipes, new repos
   and syncing, and the agent rules.
+- [web_socket.md](web_socket.md): state machine, events, usage constraints and validation coverage.
+- [WebSocket example](../apps/web_socket_example/README.md): run the client example and configure
+  its parameters.
+- [Logging and relay example](../apps/asio_comm_example/README.md): direct C++ settings, logging
+  and an Assembly relay workflow.

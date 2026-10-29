@@ -14,9 +14,11 @@ nom_project_options()
 ```
 
 `std_modules.cmake` is the pre-project entry point for CMake 4.4.x `import std` support.
-`nom_kit.cmake` loads the remaining files in the required order. Call
-`nom_enable_std_modules(target)` on each existing compiled target that imports `std` or consumes
-a module using it. This stays opt-in for third-party and header-only targets.
+`nom_kit.cmake` loads the remaining files in the required order. Pass `IMPORT_STD` to
+`nom_lib`, `nom_app`, `nom_c2test`, or `nom_python_module` for each compiled target importing
+`std` or consuming a module using it. Disabled helpers skip module setup too. Interface
+libraries cannot use `IMPORT_STD`. For targets created outside the kit, call
+`nom_enable_std_modules(target)` after creating the target.
 See [standard-library modules](../../docs/kit/build.md#modules) for consumer setup and toolchains.
 
 | Location | Purpose |
@@ -30,10 +32,9 @@ See [standard-library modules](../../docs/kit/build.md#modules) for consumer set
 For a library defined in `core/prices/CMakeLists.txt`:
 
 ```cmake
-nom_lib(prices
+nom_lib(prices IMPORT_STD
     MODULES prices.cppm
     SOURCES prices.cpp)
-nom_enable_std_modules(prices)
 
 nom_install_package(TARGETS prices)
 ```
@@ -45,10 +46,7 @@ use `find_package(<project> CONFIG REQUIRED)` and link `nom::prices`.
 For an application in `apps/capture/CMakeLists.txt`:
 
 ```cmake
-nom_app(capture SOURCES main.cpp DEPS nom::prices)
-if(nom_build_apps)
-    nom_enable_std_modules(capture)
-endif()
+nom_app(capture IMPORT_STD SOURCES main.cpp DEPS nom::prices)
 ```
 
 This creates target `capture`, producing `bin/capture`. Use `capture` directly with
@@ -60,7 +58,7 @@ adjacent `config/` directory is collected and installed with the application. Ad
 Both helpers accept `COMPILE_OPTIONS`, a list of compiler flags:
 
 ```cmake
-nom_app(capture_perf SOURCES main.cpp DEPS nom::prices
+nom_app(capture_perf IMPORT_STD SOURCES main.cpp DEPS nom::prices
     COMPILE_OPTIONS -DNOM_CONFIG_APP=capture -Wextra)
 ```
 

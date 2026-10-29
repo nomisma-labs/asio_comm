@@ -2,3 +2,5 @@
 # SPDX-License-Identifier: LicenseRef-Nomisma-Labs-Proprietary
 
 # One subdirectory per Catch2 unit test suite (docs/kit/howto.md#a-unit-test-suite).
+
+add_subdirectory(web_socket)

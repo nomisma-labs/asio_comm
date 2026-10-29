@@ -240,10 +240,10 @@ The entry point provides:
 |---|---|
 | `nom_enable_std_modules(<target>)` | Enable C++23 standard-library modules on an existing compiled target; validate toolchain support and restrict Clang's reserved-module-name warning exception to vendor sources. |
 | `nom_project_options()` | The project's options (below). Call it right after `project()`. |
-| `nom_lib(<name> [STATIC \| SHARED] [SOURCES …] [HEADERS …] [MODULES …] [BASE_DIR <dir>] [PUBLIC_DEPS …] [PRIVATE_DEPS …] [COMPILE_OPTIONS …])` | Library `<name>` plus alias `nom::<name>`. `MODULES` lists native interfaces and partitions; `SOURCES` lists implementation units and other compiled sources. File sets are rooted at `BASE_DIR` (default `core/`). Header-only macro or dependency adapters can be INTERFACE targets. Compile options are PRIVATE for compiled libraries and INTERFACE otherwise. |
-| `nom_app(<name> SOURCES … [DEPS …] [BUILD_FOR …] [COMPILE_OPTIONS …])` | Executable target `<name>` (unique across the whole build), binary `bin/<name>`; selects default build/install participation by preset; collects an adjacent `config/` directory. Compile options are PRIVATE. |
-| `nom_python_module(<target> MODULE_NAME <name> PACKAGE <package> SOURCES … [DEPS …] [RUNTIME_LIBRARIES …])` | Linux Python extension and explicitly bundled shared libraries, installed through the `nom_python` component. |
-| `nom_c2test(<suite> SOURCES … [DEPS …] [LABELS …] [PROPERTIES …])` | Catch2 executable `<project>_<suite>`, registered with CTest and labeled `unit`; `LABELS` replaces the label, `PROPERTIES` sets other test properties. Needs `nom_find_catch2()`. |
+| `nom_lib(<name> [IMPORT_STD] [STATIC \| SHARED] [SOURCES …] [HEADERS …] [MODULES …] [BASE_DIR <dir>] [PUBLIC_DEPS …] [PRIVATE_DEPS …] [COMPILE_OPTIONS …])` | Library `<name>` plus alias `nom::<name>`. `MODULES` lists native interfaces and partitions; `SOURCES` lists implementation units and other compiled sources. File sets are rooted at `BASE_DIR` (default `core/`). Header-only macro or dependency adapters can be INTERFACE targets. Compile options are PRIVATE for compiled libraries and INTERFACE otherwise. |
+| `nom_app(<name> [IMPORT_STD] SOURCES … [DEPS …] [BUILD_FOR …] [COMPILE_OPTIONS …])` | Executable target `<name>` (unique across the whole build), binary `bin/<name>`; selects default build/install participation by preset; collects an adjacent `config/` directory. Compile options are PRIVATE. |
+| `nom_python_module(<target> [IMPORT_STD] MODULE_NAME <name> PACKAGE <package> SOURCES … [DEPS …] [RUNTIME_LIBRARIES …])` | Linux Python extension and explicitly bundled shared libraries, installed through the `nom_python` component. |
+| `nom_c2test(<suite> [IMPORT_STD] SOURCES … [DEPS …] [LABELS …] [PROPERTIES …])` | Catch2 executable `<project>_<suite>`, registered with CTest and labeled `unit`; `LABELS` replaces the label, `PROPERTIES` sets other test properties. Needs `nom_find_catch2()`. |
 | `nom_library_usage_tests(<dir> [OPTIONS …])` | Integration tests: build and run a separate project using this library as an installed package and from source (see Tests). |
 | `nom_install_package(TARGETS … [DEPENDENCIES …])` | Install rules and `<project>-config.cmake`, so consumers can `find_package(<project>)` and link `nom::<target>`. The config finds `DEPENDENCIES` first, with the version and components a kit service found them with. |
 | `nom_require_submodule(<path>)` | Fails early, with the fix, when a submodule wasn't checked out. |
@@ -354,19 +354,28 @@ project(prices LANGUAGES CXX)
 include(cmake/kit/nom_kit.cmake)
 nom_project_options()
 
-nom_lib(prices MODULES prices.cppm)
-nom_enable_std_modules(prices)
+nom_lib(prices IMPORT_STD MODULES prices.cppm)
+nom_app(capture IMPORT_STD SOURCES main.cpp DEPS nom::prices)
+nom_c2test(prices_test IMPORT_STD SOURCES prices_test.cxx DEPS nom::prices)
 ```
 
-`nom_enable_std_modules()` checks `CMAKE_CXX_COMPILER_IMPORT_STD` for C++23 and sets
-`CXX_MODULE_STD ON`. It does not enable the feature globally on third-party targets. Keep guards
-around calls for optional apps, tests or Python extensions when their targets may be absent.
+`IMPORT_STD` is an explicit option on `nom_lib`, `nom_app`, `nom_c2test`, and
+`nom_python_module`. Each helper calls `nom_enable_std_modules()` internally after creating
+the target; disabled apps, tests and Python extensions skip this setup. Interface libraries
+reject the option because they compile no sources. The helper checks
+`CMAKE_CXX_COMPILER_IMPORT_STD` for C++23 and sets `CXX_MODULE_STD ON` only on that target.
+For targets created outside the kit, keep calling `nom_enable_std_modules(target)` directly,
+with a guard if the target may be absent. Find Catch2 before the test helper as usual.
 For Clang, only the vendor's `std`/`std.compat` sources receive
 `-Wno-reserved-module-identifier`; project warning settings remain intact.
 
 The experimental gate in `std_modules.cmake` is specific to CMake 4.4. Other CMake series need
 validation and an updated configuration; the helper rejects them instead of silently using a
-stale gate. When adopting this in an existing build, reconfigure from a fresh build directory
+stale gate. The shared configure presets use schema version 12 and
+`"warnings": { "experimental": false }` to acknowledge experimental features while leaving
+other developer warnings enabled. For configuration without these presets, pass
+`-Wno-experimental` explicitly; target helpers do not change warning policy.
+When adopting this in an existing build, reconfigure from a fresh build directory
 so CXX toolchain detection runs with the gate enabled.
 
 Source consumers must include the entry point before their outer `project()`; loading it from

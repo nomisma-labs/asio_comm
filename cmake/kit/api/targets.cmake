@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Alexey Tkachenko
 # SPDX-License-Identifier: LicenseRef-Nomisma-Labs-Proprietary
 
-# nom_lib(<name> [STATIC | SHARED] [SOURCES <files>] [HEADERS <files>] [MODULES <files>] [BASE_DIR <dir>]
+# nom_lib(<name> [STATIC | SHARED] [IMPORT_STD] [SOURCES <files>] [HEADERS <files>] [MODULES <files>] [BASE_DIR <dir>]
 #                 [PUBLIC_DEPS <targets>] [PRIVATE_DEPS <targets>] [COMPILE_OPTIONS <options>])
 #
 # Creates <name> and its alias nom::<name>. Nomisma library APIs are declared in MODULES.
@@ -10,13 +10,17 @@
 # BUILD_SHARED_LIBS supplies the default. HEADERS and MODULES become file sets rooted at BASE_DIR (default:
 # <project>/core), so they install under the same path they are included by: <name>/file.h.
 # COMPILE_OPTIONS are PRIVATE for compiled libraries and INTERFACE for header-only targets.
+# IMPORT_STD enables standard-library modules and requires a compiled library.
 function(nom_lib name)
-    cmake_parse_arguments(PARSE_ARGV 1 arg "STATIC;SHARED" "BASE_DIR" "SOURCES;HEADERS;MODULES;PUBLIC_DEPS;PRIVATE_DEPS;COMPILE_OPTIONS")
+    cmake_parse_arguments(PARSE_ARGV 1 arg "STATIC;SHARED;IMPORT_STD" "BASE_DIR" "SOURCES;HEADERS;MODULES;PUBLIC_DEPS;PRIVATE_DEPS;COMPILE_OPTIONS")
     if(arg_STATIC AND arg_SHARED)
         message(FATAL_ERROR "nom_lib(${name}): STATIC and SHARED are mutually exclusive")
     endif()
     if((arg_STATIC OR arg_SHARED) AND NOT (arg_SOURCES OR arg_MODULES))
         message(FATAL_ERROR "nom_lib(${name}): STATIC/SHARED requires SOURCES or MODULES")
+    endif()
+    if(arg_IMPORT_STD AND NOT (arg_SOURCES OR arg_MODULES))
+        message(FATAL_ERROR "nom_lib(${name}): IMPORT_STD requires SOURCES or MODULES")
     endif()
     set(linkage)
     if(arg_STATIC)
@@ -36,6 +40,9 @@ function(nom_lib name)
         set(scope INTERFACE)
     endif()
     add_library(nom::${name} ALIAS ${name})
+    if(arg_IMPORT_STD)
+        nom_enable_std_modules(${name})
+    endif()
 
     if(arg_SOURCES)
         target_sources(${name} PRIVATE ${arg_SOURCES})
@@ -69,7 +76,7 @@ function(nom_lib name)
     endif()
 endfunction()
 
-# nom_app(<name> SOURCES <files> [DEPS <targets>] [BUILD_FOR <names>] [COMPILE_OPTIONS <options>])
+# nom_app(<name> [IMPORT_STD] SOURCES <files> [DEPS <targets>] [BUILD_FOR <names>] [COMPILE_OPTIONS <options>])
 #
 # Creates target <name>; callers choose names unique across the whole build. The binary is
 # bin/<name> in the project's build directory. If the app directory contains config/,
@@ -77,11 +84,12 @@ endfunction()
 # installation is enabled, install selected apps and their collected config. BUILD_FOR defaults
 # to any; NOM_BUILD_PRESET=complete selects every app. Other apps remain explicitly buildable.
 # COMPILE_OPTIONS apply only to this executable. Does nothing when nom_build_apps is OFF.
+# IMPORT_STD enables standard-library modules only when the target is created.
 function(nom_app name)
     if(NOT nom_build_apps)
         return()
     endif()
-    cmake_parse_arguments(PARSE_ARGV 1 arg "" "" "SOURCES;DEPS;BUILD_FOR;COMPILE_OPTIONS")
+    cmake_parse_arguments(PARSE_ARGV 1 arg "IMPORT_STD" "" "SOURCES;DEPS;BUILD_FOR;COMPILE_OPTIONS")
     if(NOT arg_BUILD_FOR)
         set(arg_BUILD_FOR any)
     endif()
@@ -90,6 +98,9 @@ function(nom_app name)
         set(selected TRUE)
     endif()
     add_executable(${name} ${arg_SOURCES})
+    if(arg_IMPORT_STD)
+        nom_enable_std_modules(${name})
+    endif()
     if(NOT selected)
         set_target_properties(${name} PROPERTIES EXCLUDE_FROM_ALL TRUE)
     endif()

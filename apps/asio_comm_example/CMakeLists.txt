@@ -1,8 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Alexey Tkachenko
 # SPDX-License-Identifier: LicenseRef-Nomisma-Labs-Proprietary
 
-nom_app(asio_comm_example SOURCES main.cpp
-    DEPS nom::config_types nom::json_config nom::spd_logger nom::assembly)
-if(TARGET asio_comm_example)
-    nom_enable_std_modules(asio_comm_example)
-endif()
+nom_app(asio_comm_example IMPORT_STD SOURCES main.cpp
+    DEPS nom::spd_logger nom::assembly)

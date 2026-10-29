@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Alexey Tkachenko
 # SPDX-License-Identifier: LicenseRef-Nomisma-Labs-Proprietary
 
-# nom_python_module(<target> MODULE_NAME <name> PACKAGE <dotted-name>
+# nom_python_module(<target> [IMPORT_STD] MODULE_NAME <name> PACKAGE <dotted-name>
 #                   SOURCES <files> [DEPS <targets>] [RUNTIME_LIBRARIES <shared-targets>])
 #
 # Builds a CPython extension and installs it with explicitly selected shared libraries into
@@ -10,11 +10,12 @@
 # RUNTIME_LIBRARIES is the complete non-system shared-library closure, including imported
 # targets. It is not an automatic system-library collector or a manylinux repair step.
 # Does nothing when nom_build_python is OFF; nom_python installation is independent of nom_install.
+# IMPORT_STD enables standard-library modules only when the target is created.
 function(nom_python_module target)
     if(NOT nom_build_python)
         return()
     endif()
-    cmake_parse_arguments(PARSE_ARGV 1 arg "" "MODULE_NAME;PACKAGE" "SOURCES;DEPS;RUNTIME_LIBRARIES")
+    cmake_parse_arguments(PARSE_ARGV 1 arg "IMPORT_STD" "MODULE_NAME;PACKAGE" "SOURCES;DEPS;RUNTIME_LIBRARIES")
     if(arg_UNPARSED_ARGUMENTS OR arg_KEYWORDS_MISSING_VALUES OR NOT arg_SOURCES
        OR NOT arg_MODULE_NAME MATCHES "^[A-Za-z_][A-Za-z_0-9]*$"
        OR NOT arg_PACKAGE MATCHES "^[A-Za-z_][A-Za-z_0-9]*(\\.[A-Za-z_][A-Za-z_0-9]*)*$")
@@ -92,6 +93,9 @@ function(nom_python_module target)
     endwhile()
 
     Python_add_library(${target} MODULE WITH_SOABI ${arg_SOURCES})
+    if(arg_IMPORT_STD)
+        nom_enable_std_modules(${target})
+    endif()
     target_compile_features(${target} PRIVATE cxx_std_23)
     target_link_libraries(${target} PRIVATE ${arg_DEPS})
     if(runtime_targets)

@@ -1,23 +1,27 @@
 # SPDX-FileCopyrightText: 2026 Alexey Tkachenko
 # SPDX-License-Identifier: LicenseRef-Nomisma-Labs-Proprietary
 
-# nom_c2test(<suite> SOURCES <files> [DEPS <targets>] [LABELS <labels>]
+# nom_c2test(<suite> [IMPORT_STD] SOURCES <files> [DEPS <targets>] [LABELS <labels>]
 #            [PROPERTIES <name> <value>...])
 #
 # One Catch2 executable per test folder: target <project>_<suite>, registered with CTest and
 # labeled unit; LABELS replaces that label list. PROPERTIES sets other test properties, such as
 # TIMEOUT or RESOURCE_LOCK, so callers never spell the test name. Call nom_find_catch2() first
 # when enabled. Does nothing when nom_build_tests is OFF.
+# IMPORT_STD enables standard-library modules only when the target is created.
 function(nom_c2test suite)
     if(NOT nom_build_tests)
         return()
     endif()
-    cmake_parse_arguments(PARSE_ARGV 1 arg "" "" "SOURCES;DEPS;LABELS;PROPERTIES")
+    cmake_parse_arguments(PARSE_ARGV 1 arg "IMPORT_STD" "" "SOURCES;DEPS;LABELS;PROPERTIES")
     if(NOT arg_LABELS)
         set(arg_LABELS unit)
     endif()
     set(target ${PROJECT_NAME}_${suite})
     add_executable(${target} ${arg_SOURCES})
+    if(arg_IMPORT_STD)
+        nom_enable_std_modules(${target})
+    endif()
     target_link_libraries(${target} PRIVATE ${arg_DEPS} Catch2::Catch2WithMain)
     target_compile_features(${target} PRIVATE cxx_std_23)
     set_target_properties(${target} PROPERTIES CXX_EXTENSIONS OFF)

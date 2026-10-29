@@ -66,7 +66,8 @@ hidden behind a module API, or consumed through their headers when needed. Use `
 in each file that uses standard-library declarations. Keep macro-bearing standard headers
 (such as `<cassert>`) and third-party includes before imports, in the global module fragment
 for module units. Enable standard-library module detection before `project()` and opt each
-compiled consumer target in with `nom_enable_std_modules(target)`.
+compiled consumer target in with `IMPORT_STD` in its kit helper call. For targets created
+outside the kit, use `nom_enable_std_modules(target)` after creating the target.
 See [build.md](build.md#modules) for the supported toolchain and consumer setup.
 
 ## CMake names

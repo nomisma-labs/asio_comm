@@ -1,5 +1,5 @@
 {
-  "version": 6,
+  "version": 12,
   "cmakeMinimumRequired": { "major": 4, "minor": 4, "patch": 0 },
   "configurePresets": [
     {
@@ -7,6 +7,7 @@
       "hidden": true,
       "generator": "Ninja",
       "binaryDir": "${sourceDir}/build/${presetName}",
+      "warnings": { "experimental": false },
       "cacheVariables": { "CMAKE_EXPORT_COMPILE_COMMANDS": "ON" }
     },
     {

@@ -3,19 +3,32 @@
 
 # Integration checks for library usage and installation (docs/kit/howto.md#library-usage-integration-tests).
 
-if(nom_build_tests AND TARGET asio_comm_example)
-    set(example_config "${CMAKE_BINARY_DIR}/config/asio_comm_example/asio_comm_example.json")
+nom_library_usage_tests(library_usage)
 
+if(nom_build_tests AND TARGET web_socket_example)
+    # A client driven by the local TLS peer; it is a test fixture, not an installed app.
+    block(SCOPE_FOR VARIABLES)
+        set(nom_install OFF)
+        nom_app(asio_comm_headers_client IMPORT_STD SOURCES web_socket/headers_test.cxx
+            DEPS nom::asio_comm nom::spd_logger)
+        nom_app(asio_comm_disconnecting_client IMPORT_STD SOURCES web_socket/disconnecting_test.cxx
+            DEPS nom::asio_comm nom::spd_logger)
+    endblock()
+
+    find_package(Python 3.10 REQUIRED COMPONENTS Interpreter)
+    find_program(openssl_executable openssl REQUIRED)
+    add_test(NAME ${PROJECT_NAME}_web_socket_loopback
+        COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/web_socket/loopback_test.py
+            --client $<TARGET_FILE:web_socket_example>
+            --headers-client $<TARGET_FILE:asio_comm_headers_client>
+            --disconnecting-client $<TARGET_FILE:asio_comm_disconnecting_client> --openssl ${openssl_executable})
+    set_tests_properties(${PROJECT_NAME}_web_socket_loopback PROPERTIES LABELS integration TIMEOUT 60)
+endif()
+
+if(nom_build_tests AND TARGET asio_comm_example)
     add_test(NAME ${PROJECT_NAME}_example_workflow
-        COMMAND asio_comm_example --config "${example_config}")
+        COMMAND asio_comm_example)
     set_tests_properties(${PROJECT_NAME}_example_workflow PROPERTIES
         LABELS integration
         PASS_REGULAR_EXPRESSION "asio_comm_example finished")
-
-    add_test(NAME ${PROJECT_NAME}_example_check_config
-        COMMAND asio_comm_example --config "${example_config}" --check-config)
-    set_tests_properties(${PROJECT_NAME}_example_check_config PROPERTIES
-        LABELS integration
-        PASS_REGULAR_EXPRESSION "Config OK for asio_comm_example"
-        FAIL_REGULAR_EXPRESSION "app started with config|Example warning|finished")
 endif()

@@ -21,10 +21,6 @@ nom_require_submodule(external/base)
 FetchContent_Declare(base SOURCE_DIR ${PROJECT_SOURCE_DIR}/external/base)
 FetchContent_MakeAvailable(base)
 
-nom_require_submodule(external/json_config)
-FetchContent_Declare(json_config SOURCE_DIR ${PROJECT_SOURCE_DIR}/external/json_config)
-FetchContent_MakeAvailable(json_config)
-
 nom_require_submodule(external/spd_logger)
 FetchContent_Declare(spd_logger SOURCE_DIR ${PROJECT_SOURCE_DIR}/external/spd_logger)
 FetchContent_MakeAvailable(spd_logger)
@@ -35,6 +31,8 @@ FetchContent_MakeAvailable(assembly)
 
 # Boost comes from system packages (docs/kit/build.md#dependencies).
 nom_find_boost()
+find_package(OpenSSL REQUIRED)
+find_package(Threads REQUIRED)
 
 # Discover Catch2 before any code directory can register an inline test suite.
 if(nom_build_tests)

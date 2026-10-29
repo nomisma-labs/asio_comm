@@ -1,0 +1,300 @@
+# WebSocket
+
+This records the current implementation in
+[`web_socket.cppm`](../core/asio_comm/web_socket.cppm). The diagram describes
+one `web_socket::session`; every public `connect()` creates a new session and closes any old
+one. Usage examples are in the [WebSocket example README](../apps/web_socket_example/README.md).
+Usage constraints, deferred work and validation coverage follow the event descriptions.
+The diagram assumes the existing contract of serialized calls and nonthrowing delegates.
+
+## State diagram
+
+Top-level state captions show `status_`. The `connecting` group expands its sequential operation
+stages; these are not additional `ws_status` values. The diagram starts with a fresh connection
+attempt. The constructor's brief `disconnected` status is folded into the initial arrow;
+`session.connect()` enters `connecting` before starting resolution. Sessions are never reused.
+Ownership and destruction are described below; callback guards use `status_` only.
+Edge labels use **event [condition] / action**; entering a top-level state implies its stored status.
+Multiple events on one transition are separated by commas; `/` separates an event from its actions.
+Transitions from the `connecting` group apply to every stage within it.
+All `close()` edges share the cleanup actions described below the diagram.
+
+```mermaid
+stateDiagram-v2
+    direction TB
+
+    [*] --> Connecting: **[connect]** / async_resolve
+
+    state "disconnected" as Disconnected
+    state "connecting" as Connecting {
+        direction TB
+        state "resolving" as Resolving
+        state "tcp_connecting" as TcpConnecting
+        state "ssl_handshaking" as SslHandshaking
+        state "ws_handshaking" as WsHandshaking
+
+        [*] --> Resolving
+        Resolving --> TcpConnecting: ResolveDone / TCP connect
+        TcpConnecting --> SslHandshaking: TcpConnectDone / TLS handshake
+        SslHandshaking --> WsHandshaking: TlsHandshakeDone / WS handshake
+    }
+    state "connected" as Connected
+    state "disconnecting" as Disconnecting
+    state "failed" as Failed
+
+    WsHandshaking --> Connected: WsHandshakeDone<br/>/ on_connected, start I/O if still connected
+    Connecting --> Failed: ConnectError, ConnectSetupException / emit network_error
+    Resolving --> Failed: ConnectStartException / rethrow
+
+    Connected --> Connected: ReadDone [ok]<br/>/ ws_data, next read unless disconnected
+    Connected --> Disconnecting: shutdown [idle timer or write failure]<br/>/ cancel timers, async_close
+    Connected --> Disconnected: ControlFrame [close], ReadDone [error]<br/>/ cancel idle timer, on_disconnected
+
+    Disconnecting --> Disconnecting: ReadDone [ok] / ws_data, next read unless disconnected
+    Disconnecting --> Disconnected: ControlFrame [close], ReadDone [error],<br/>CloseDone [any] / on_disconnected
+    Disconnected --> Disconnected: Pending completion<br/>/ no delegate calls or new I/O
+
+    Connecting --> Disconnected: close()
+    Connected --> Disconnected: close()
+    Disconnecting --> Disconnected: close()
+    Failed --> Disconnected: close()
+
+    classDef pendingStyle fill:#ADD8E6
+    classDef terminalStyle fill:#A9A9A9
+    classDef liveStyle fill:#9ACD32
+    classDef disconnectingStyle fill:#FFD580
+
+    class Resolving,TcpConnecting,SslHandshaking,WsHandshaking pendingStyle
+    class Disconnected,Failed terminalStyle
+    class Connected liveStyle
+    class Disconnecting disconnectingStyle
+```
+
+- `disconnecting` reports that an internal graceful close has started. `is_connected()` is
+  false and `send()` returns false. Successful timer callbacks stop,
+  and callers prevent further `shutdown()` requests. Pending reads can still deliver data.
+- The initial arrow represents a fresh session's connection attempt. Public reconnect
+  closes the old session and starts a new diagram. Before the first connect and
+  after `close()`, the wrapper has no session and reports `disconnected`.
+- `close()`, called by **[close]**, replacement **[connect]**, or **[destroy]**, detaches
+  the session (`parent_ = nullptr`) and sets `disconnected` before independently attempting
+  TCP close and resolver/timer cancellation. Cleanup exceptions are suppressed; no event is
+  delivered. These actions also apply when the session is already disconnected.
+- `disconnected` covers both an attached session whose connection ended and a detached session
+  after `close()`. Reaching it does not destroy the object: pending handlers may retain shared
+  ownership. Destruction occurs when the last shared owner releases the session.
+- `shutdown()` is an internal helper that requires connected status. Any other status is
+  a precondition violation: assert, or log and return when assertions are disabled. Pending attempts are
+  cancelled through `close()`, which detaches the session. Sessions that enter `failed` or
+  `disconnected` through operation completions remain attached until `close()`, reconnect or
+  owner destruction; those transitions do not automatically detach them.
+- The first close-frame, read-error or close-completion handler that sees `connected` or
+  `disconnecting` sets `disconnected` and emits `on_disconnected`. Later handlers do not emit another terminal event.
+  A `CloseDone` error does not select `Failed` on this path.
+- Self-loops mean no change to `status_`. Other unchanged-state cases are listed below.
+  Read, control-frame, ping and close completions stop when disconnected.
+  Delegate calls are synchronous; `close()` or reconnect in a
+  callback sets the old session to disconnected. Read handlers recheck for disconnection,
+  and handshake handlers require connected status before starting I/O.
+
+## Events
+
+Names such as `ResolveDone` label outcomes handled by existing callbacks, not new C++ event types.
+The four connection-chain `Done` events denote success; failures are represented by `ConnectError`.
+Other completion events can carry either result: `ok` means a clear error code, and `error`
+means a nonzero error code. Completion handlers can arrive after cancellation, including
+with success if already queued.
+
+### Client commands and lifetime
+
+- **`[connect]`** — `web_socket::connect(callbacks)`: replace the previous session and
+  delegate; begin a fresh connection attempt reading the owner's `ws_params` through `parent_`.
+  Parameters, including headers, persist across reconnects and are not copied into the session.
+  The new session's `connect()` dispatches through `switch (status_)`: disconnected enters connecting and starts
+  DNS resolution; other states log an error and do nothing. Existing sessions are never reused.
+  If DNS initiation throws, the new session becomes failed and the original exception propagates
+  to the caller; no delegate event is emitted. Exceptions before a new session is installed
+  are also propagated, without creating a failed session.
+- **`[close]`** — `web_socket::close() noexcept`: detach and set disconnected first, then
+  independently attempt TCP close, resolver cancellation and cancellation of each timer.
+  Cleanup exceptions are suppressed without logging or delegate calls; a failed cancellation
+  may leave an operation pending until it completes naturally. Its completion cannot notify
+  the delegate. There is no final event or buffered-data flush. No session means no-op.
+- **`[destroy]`** — owner destruction calls `close()`; the last shared owner release later
+  destroys a session still retained by pending handlers.
+- **`[send]`** — blocking write returning a `[[nodiscard]]` bool. A complete write returns true;
+  short writes and error-code failures request `shutdown()` and return false. Without a session,
+  the public wrapper returns false. Otherwise, the session handler uses `switch (status_)`:
+  the connected case writes; every other state logs a warning and returns false without writing.
+- **`[update_delegate]`** — replace the event recipient; no lifecycle transition.
+- **Parameter edits** — `params()` exposes the owner's `ws_params`. Edits must be serialized
+  with calls and completions; each operation reads the current values when it needs them.
+  No change detection or automatic reconfiguration occurs: existing deadlines, socket options
+  and sent handshake headers remain unchanged until the corresponding setup runs again.
+  The outbound-ping flag starts the timer only at handshake completion; later edits do not
+  start or stop it. `params() = {}` restores defaults.
+
+### Connection completions
+
+These handlers dispatch through `switch (status_)`: connecting handles the current stage,
+disconnected ignores its completion, and all other states assert, or log and return when
+assertions are disabled. `connect()` sets connecting before starting DNS resolution; each
+successful stage starts the next operation without changing that status. Connection stages
+run sequentially, with only one stage pending at a time. A connection error sets `failed`
+and ends the chain, so no later connection completion can enter failed.
+`close()`, reconnect, or owner destruction sets the session to `disconnected` before cancelling
+operations, so queued completions stop without checking `parent_`.
+The synchronous socket setup and handshake request decorator assert connecting.
+Setup and operation-initiation exceptions inside these completion handlers set failed and
+emit `network_error` after leaving the catch. The event identifies the failed stage and carries
+`std::exception::what()`, or `Unknown exception` for other exception types. The original setup
+exception is suppressed. Delegate calls remain outside the guarded operations, so callback
+exceptions are not translated into another network error. The failed session stays owned
+until `close()` or a new `connect()`.
+
+- **`ResolveDone`** — `on_resolve`: successful DNS resolution starts TCP connect.
+- **`TcpConnectDone`** — `on_connect`: successful TCP connection and SNI setup start the
+  TLS handshake.
+- **`TlsHandshakeDone`** — `on_ssl_handshake`: successful TLS handshake starts the
+  WebSocket handshake with the owner's current `params().headers` and `agent_name`.
+- **`WsHandshakeDone`** — `on_handshake`: successful WebSocket handshake records activity, sets
+  `connected` and emits `on_connected`. If still connected after the delegate returns, start
+  the read/control callbacks, idle timer and optional outbound pings. Calling `close()` or
+  triggering a write-failure shutdown from the delegate prevents this work from starting.
+- **`ConnectError`** — diagram shorthand for an error in any of those four completions, or SNI
+  setup failure inside `on_connect`. Emit `network_error`; no automatic `close()`.
+- **`ConnectStartException`** — DNS initiation throws during the caller's `connect()` invocation.
+  Set failed and rethrow to that caller; no delegate event or automatic `close()`.
+- **`ConnectSetupException`** — setup or operation initiation throws inside `on_resolve`,
+  `on_connect`, `on_ssl_handshake`, or the connecting-phase setup in `on_handshake`.
+  Set failed, notify through `network_error`, and finish the handler without rethrowing the
+  reported exception. No automatic `close()`. Operations started after entering connected
+  use the existing behavior and need a separate exception-cleanup policy.
+
+### Read, control-frame and close completions
+
+- **`ReadDone(ec, bytes_transferred)`** — `on_receive`: complete message or read error.
+  Dispatch through `switch (status_)`: connected and disconnecting share the read handler;
+  disconnected completions are ignored. Other states assert, or log and return when assertions
+  are disabled. Success updates receive activity, emits `ws_data`, consumes the buffer and
+  rearms unless disconnected during the delegate call. Error cancels the idle timer, sets
+  disconnected and emits `on_disconnected`; remaining buffered bytes are not delivered.
+- **`ControlFrame(kind)`** — `on_control`: `ping`, `pong` or `close`, dispatched through
+  `switch (status_)`. Connected and disconnecting share frame handling: the handshake started
+  reading, and pending operations may still process control frames after `shutdown()` starts.
+  Ping updates receive activity; pong does so only when outbound pings are enabled. Close cancels
+  the idle timer, sets `disconnected` and emits `on_disconnected` (`Closed by server`).
+  Disconnected callbacks are ignored after `close()`, a prior peer close, a read error, or
+  `on_shutdown()`. Other states assert, or log and return when assertions are disabled.
+- **`CloseDone(ec)`** — `on_shutdown`: local WebSocket close result, successful or not.
+  Dispatch through `switch (status_)`. The disconnecting case sets `disconnected` and
+  emits `on_disconnected` with an empty or error reason. The disconnected case does nothing;
+  all other states assert, or log and return when assertions are disabled.
+
+Valid `ReadDone` entry states and their origins:
+
+- `connected`: `on_handshake()` set connected and started the first read; subsequent successful
+  reads rearm the loop while no close has started.
+- `disconnecting`: `shutdown()` set disconnecting after an idle timer expiry/error or write failure,
+  before a pending read completion was delivered. A `ws_data` delegate can also cause a write
+  failure; after it returns, the read handler rearms while disconnecting. Completed messages
+  are still delivered in this state.
+- `disconnected`: `close()` (including reconnect/destruction), the peer-close control callback,
+  or `on_shutdown()` changed the state before the pending read completion was delivered.
+  Ignoring it avoids callbacks to a detached owner or a duplicate terminal event.
+
+`ReadDone` cannot occur while connecting or failed: reads start only after a successful
+handshake, and a session is never reused. A previous read error does not produce another read
+completion: only one read is outstanding, and its error path does not rearm. The switch's
+default branch expresses the entry-state invariant.
+`CloseDone` cannot arrive while connected, connecting or failed: `shutdown()` sets
+disconnecting before starting the operation. The switch's default branch rejects these
+states and unknown status values.
+
+### Timers and internal close request
+
+- **`PingTimerDone(ec)`** — `on_ping_timer`: a timer using `params().ping_interval_sec`
+  (20 seconds by default) when enabled, dispatched through `switch (status_)`.
+  Connected handles the timer started after handshake or rearmed after
+  a previous ping completion: success starts one ping send. Disconnecting handles a canceled or
+  queued wait after `shutdown()`; disconnected handles waits delivered after `close()`, peer
+  close, a read error, or `on_shutdown()`. Neither state sends or rearms. Cancellation is
+  ignored and non-cancellation errors only log in all three states. Other states assert,
+  or log and return when assertions are disabled.
+- **`PingDone(ec)`** — `on_ping`: dispatch through `switch (status_)`; no state change.
+  Connected logs success/failure and rearms the timer using the current ping interval.
+  Disconnecting means `shutdown()` started while the send completion was pending; ignore the
+  result without logging or rearming. Disconnected likewise ignores completion after `close()`,
+  a peer close, a read error, or `on_shutdown()`, including cancellation errors and queued success.
+  Other states assert, or log and return when assertions are disabled.
+  The next interval starts when the send completes, without waiting for a pong. No timer is
+  armed while that send is pending, so periodic ping sends cannot overlap.
+- **`IdleTimerDone(ec)`** — `on_idle_timer`: a timer scheduled for the current ping interval
+  plus half that interval (whole seconds; 30 seconds by default), dispatched through `switch (status_)`.
+  In connected, successful expiry requests `shutdown()` when whole seconds since receive activity
+  exceed the current ping interval plus one fifth of it (whole seconds; 24 by default); otherwise rearm.
+  Cancellation is ignored; other timer errors request shutdown.
+  Disconnecting and disconnected ignore both canceled waits and already queued expiries.
+  Other states assert, or log and return when assertions are disabled: the idle timer starts only
+  after a successful handshake, and sessions are never reused.
+- **`shutdown()`** — internal close request from idle timer or handled write failure. Requires
+  connected status, then sets `disconnecting`, cancels both timers and starts `async_close(normal)`.
+  Closing uses the existing WebSocket timeout settings; no TCP deadline is enabled here.
+  Any other status is a precondition violation. All callers enforce the connected-state requirement.
+
+Both timers ignore cancellation and stale successful completions. `shutdown()` has no public
+API and does not cancel connection attempts.
+Timer and ping completions accept only connected, disconnecting or disconnected, allowing
+cancellation completions after shutdown or `close()`. All three handlers enforce this through
+their switch's default branch.
+
+The TCP deadline uses `params().async_operation_timeout_sec` when `on_resolve` starts TCP
+connect; it also covers the subsequent TLS handshake. Socket buffer sizes are read from
+parameters after TCP connects. WebSocket handshake/close timeouts use Beast's client defaults.
+
+Transport/protocol timeouts arrive through the relevant completion's error code; they are
+not a separate callback or an unconditional transition to `failed`.
+
+### Emitted delegate events
+
+These are outputs of the current machine, shown as actions on edges:
+
+- **`nom::event::on_connected`** — successful WebSocket handshake, after status becomes `connected`.
+- **`nom::event::ws_data`** — successful read; borrows the message until the callback returns.
+- **`nom::event::on_disconnected`** — the first applicable peer-close, read-error or close-completion
+  handler that changes status from `connected` or `disconnecting` to `disconnected`.
+- **`nom::event::network_error`** — connection-chain failure. A read or close-completion error while
+  connected or disconnecting emits `on_disconnected` instead.
+
+## Usage constraints and deferred work
+
+- **Calls and callbacks.** Serialize client calls, parameter edits and completions. Delegates
+  must not throw or replace the delegate while it is executing.
+- **Blocking writes.** `send()` blocks the executor, so a timer on that executor cannot interrupt
+  it. Queued sends and backpressure are outside the current API. Interaction with pending ping
+  or automatic control-frame writes still needs review: serialized handlers alone do not
+  prevent asynchronous operations from overlapping.
+- **Liveness.** The idle timer runs even with outbound pings disabled and can close a healthy
+  but quiet connection. DNS has no library deadline; the example supplies an overall deadline.
+- **Exceptions after connection — deferred.** Read/ping/timer initiation, control-callback
+  installation and graceful-close initiation can throw with other operations pending and the
+  session still connected or disconnecting. These paths have no automatic notification/cleanup
+  policy; `close() noexcept` remains available to the caller. Error reporting itself allocates
+  and can also fail.
+- **Event scope.** Received text/binary type and structured peer close code/reason are not exposed.
+
+## Validation
+
+The existing tests cover:
+
+- URL/enum integration, lifecycle and replacement, repeated close/destruction with queued
+  completions, and injected allocation failures during connection initiation and resolver cancellation.
+- Local TLS send/echo, fragmented messages with interleaved ping/pong, server-pushed data,
+  peer close, partial-frame EOF, close from a data callback, and certificate/hostname rejection.
+- Live headers/User-Agent settings, retained/reset parameters on reconnect, three successive
+  configured pings, and handshake setup exception reporting followed by a fresh connection.
+- Write-failure transition to disconnecting, rejected further sends, one terminal notification,
+  and prevention of receive/timer startup when closing from the connected callback.
+- Separate consumers built against both the source tree and installed package.
+
+Idle timer expiry, stalled pings, and the deferred write/exception cases above remain untested.

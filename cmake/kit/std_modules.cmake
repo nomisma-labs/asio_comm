@@ -9,7 +9,7 @@ endif()
 
 # nom_enable_std_modules(<target>)
 # Opt in each compiled target importing std or consuming a module that imports std.
-# Call only for targets that exist; nom_app/nom_c2test/nom_python_module may be disabled.
+# Prefer IMPORT_STD in kit target helpers; use this directly for existing external targets.
 function(nom_enable_std_modules target)
     if(CMAKE_VERSION VERSION_LESS 4.4 OR NOT CMAKE_VERSION VERSION_LESS 4.5)
         message(FATAL_ERROR "nom_enable_std_modules requires CMake 4.4.x; "
