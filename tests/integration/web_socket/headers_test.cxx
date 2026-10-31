@@ -6,6 +6,11 @@
 #include <cstdio>
 #endif
 
+#include <boost/asio/any_io_executor.hpp>
+#include <boost/asio/io_context.hpp>
+#include <boost/asio/steady_timer.hpp>
+#include <boost/system/error_code.hpp>
+
 import std;
 import nom.asio_comm;
 import nom.spd_logger;
@@ -18,10 +23,10 @@ int main(int argc, char** argv)
     try
     {
         nom::init_logger(nom::main_logger);
-        nom::asio::io_context io;
+        boost::asio::io_context io;
         const nom::url address(argv[1]);
         nom::web_socket client(io.get_executor(), address.host(), address.port(), address.target());
-        nom::asio::steady_timer deadline(io);
+        boost::asio::steady_timer deadline(io);
         bool accepted = false;
         unsigned connected = 0;
         unsigned network_errors = 0;
@@ -68,7 +73,7 @@ int main(int argc, char** argv)
             setup_failure = false;
             deadline.expires_after(std::chrono::seconds(5));
             deadline.async_wait(
-                [&](const nom::asio::error_code& error)
+                [&](const boost::system::error_code& error)
                 {
                     if (!error)
                     {

@@ -6,8 +6,10 @@
 #include <cstdio>
 #endif
 
-#include <cassert>
 #include <spd_logger/logging.h>
+
+#include <boost/asio/any_io_executor.hpp>
+#include <boost/asio/io_context.hpp>
 
 import std;
 import nom.asio_comm;
@@ -35,10 +37,9 @@ namespace
 {
     struct app_config
     {
-        std::string market_endpoint{"wss://fstream.binance.com/market/ws"};
-        std::string public_endpoint{"wss://fstream.binance.com/public/ws"};
+        std::string endpoint{"wss://fstream.binance.com/public/ws"};
         std::vector<std::string> symbols{"BTCUSDT"};
-        std::vector<std::string> channels{"ticker", "trade", "depth"};
+        std::vector<std::string> channels{"bookTicker", "trade", "depth@100ms"};
         nom::log_config log{.level = nom::log_level::info};
     };
 
@@ -56,8 +57,7 @@ namespace
         for (int i = 1; i < argc; ++i)
         {
             const std::string_view option{argv[i]};
-            if (option != "--symbols" && option != "--channels" && option != "--market-endpoint" &&
-                option != "--public-endpoint")
+            if (option != "--symbols" && option != "--channels" && option != "--endpoint")
                 throw std::invalid_argument("Unknown option: " + std::string(option));
             if (++i == argc)
                 throw std::invalid_argument("Missing value for " + std::string(option));
@@ -65,48 +65,27 @@ namespace
                 config.symbols = split_list(argv[i]);
             else if (option == "--channels")
                 config.channels = split_list(argv[i]);
-            else if (option == "--market-endpoint")
-                config.market_endpoint = argv[i];
             else
-                config.public_endpoint = argv[i];
+                config.endpoint = argv[i];
         }
         return config;
     }
 
-    struct subscription
-    {
-        std::string endpoint;
-        std::vector<std::string> streams;
-
-        std::string request() const
-        {
-            std::string result = R"({"method":"SUBSCRIBE","params":[)";
-            bool first = true;
-            for (const auto& stream : streams)
-            {
-                if (!first)
-                    result += ',';
-                first = false;
-                result += '"' + stream + '"';
-            }
-            result += R"(],"id":1})";
-            return result;
-        }
-    };
-
-    std::array<subscription, 2> make_subscriptions(const app_config& config)
+    std::string subscription_request(const app_config& config)
     {
         if (config.symbols.empty() || config.channels.empty())
             throw std::invalid_argument("Select at least one symbol and one channel");
+        if (config.symbols.size() > 1024 / config.channels.size())
+            throw std::invalid_argument("A connection supports at most 1024 streams");
         for (const auto& channel : config.channels)
         {
-            if (channel != "ticker" && channel != "trade" && channel != "depth")
-                throw std::invalid_argument("Unknown channel: " + channel + " (expected ticker, trade or depth)");
+            if (channel != "bookTicker" && channel != "trade" && channel != "depth" && channel != "depth@100ms")
+                throw std::invalid_argument("Unknown channel: " + channel +
+                                            " (expected bookTicker, trade, depth or depth@100ms)");
         }
 
-        std::array<subscription, 2> result;
-        result[0].endpoint = config.market_endpoint;
-        result[1].endpoint = config.public_endpoint;
+        std::string request = R"({"method":"SUBSCRIBE","params":[)";
+        bool first = true;
         for (auto symbol : config.symbols)
         {
             if (symbol.empty())
@@ -118,38 +97,25 @@ namespace
                 else if (!(letter >= 'a' && letter <= 'z') && !(letter >= '0' && letter <= '9'))
                     throw std::invalid_argument("Symbols must contain only ASCII letters and digits");
             }
-            // Validated symbols and stream names need no JSON escaping.
+            // Validated symbols and channel names need no JSON escaping.
             for (const auto& channel : config.channels)
             {
-                auto& group = result[channel == "depth" ? 1 : 0];
-                const std::string stream_name = channel == "trade" ? "aggTrade" : channel;
-                group.streams.push_back(symbol + '@' + stream_name);
-                if (group.streams.size() > 1024)
-                    throw std::invalid_argument("A connection supports at most 1024 streams");
+                if (!first)
+                    request += ',';
+                first = false;
+                request += '"' + symbol + '@' + channel + '"';
             }
         }
-        return result;
+        request += R"(],"id":1})";
+        return request;
     }
-
-    struct feed
-    {
-        feed(nom::asio::any_io_executor executor, const subscription& selected)
-            : client(executor, nom::url(selected.endpoint)), request(selected.request())
-        {
-            // Server pings are three minutes apart; periodic client pings elicit pongs for the idle timer.
-            client.params().enable_outbound_ping = true;
-        }
-
-        nom::web_socket client;
-        std::string request;
-    };
 
     template <typename Traits> struct asio_service
     {
         struct context_mixin
         {
             // The assembly constructs context services before nodes and destroys them after nodes.
-            nom::asio::io_context io;
+            boost::asio::io_context io;
         };
     };
 
@@ -157,20 +123,19 @@ namespace
     {
         void on_response(const nom::event::market_data& event)
         {
-            LINFO("{} {}", event.source, event.data);
+            LINFO("{}", event.data);
         }
     };
 
     template <typename Traits> class binance_perp_client
     {
     public:
-        explicit binance_perp_client(const app_config& config) : connect_deadline_(nom::ctx(this).io)
+        explicit binance_perp_client(const app_config& config)
+            : request_(subscription_request(config)),
+              client_(nom::ctx(this).io.get_executor(), nom::url(config.endpoint))
         {
-            for (const auto& selected : make_subscriptions(config))
-            {
-                if (!selected.streams.empty())
-                    feeds_.push_back(std::make_unique<feed>(nom::ctx(this).io.get_executor(), selected));
-            }
+            // Periodic client pings keep receive activity tracked on quiet subscriptions.
+            client_.params().enable_outbound_ping = true;
         }
 
         void on_request(nom::event::service_command command)
@@ -179,49 +144,25 @@ namespace
             {
             case nom::event::service_command::start:
             {
-                running_ = true;
-                pending_connections_ = feeds_.size();
-                connect_deadline_.expires_after(std::chrono::seconds(30));
-                connect_deadline_.async_wait(
-                    [this](const nom::asio::error_code& error)
-                    {
-                        if (!error)
-                        {
-                            LERROR("Connection setup timed out");
-                            on_request(nom::event::service_command::stop);
-                        }
-                    });
-                for (const auto& current : feeds_)
-                {
-                    // A synchronous setup failure can stop the whole feeder during connect().
-                    if (!running_)
-                        break;
-                    LINFO("Connecting to {}", current->client.url().target());
-                    current->client.connect(nom::web_socket::delegate{std::ref(*this)});
-                }
+                std::ostringstream address;
+                address << client_.url();
+                LINFO("Connecting to {}", address.str());
+                client_.connect(nom::web_socket::delegate{std::ref(*this)});
                 break;
             }
             case nom::event::service_command::stop:
-                running_ = false;
-                connect_deadline_.cancel();
-                for (const auto& current : feeds_)
-                    current->client.close();
+                client_.close();
                 break;
             }
         }
 
         void operator()(nom::web_socket& connection, const nom::event::on_connected&)
         {
-            if (--pending_connections_ == 0)
-                connect_deadline_.cancel();
             LINFO("Connected: {}", connection.session_id());
-            const auto selected =
-                std::ranges::find_if(feeds_, [&](const auto& current) { return &current->client == &connection; });
-            assert(selected != feeds_.end());
-            LINFO("{} Subscribing: {}", connection.session_id(), (*selected)->request);
-            if (!connection.send((*selected)->request))
+            LINFO("Subscribing: {}", request_);
+            if (!connection.send(request_))
             {
-                LERROR("{} Subscription send failed", connection.session_id());
+                LERROR("Subscription send failed");
                 on_request(nom::event::service_command::stop);
             }
         }
@@ -233,23 +174,21 @@ namespace
                 nom::event::market_data{.ts = event.ts, .source = connection.session_id(), .data = event.sv_data()});
         }
 
-        void operator()(nom::web_socket& connection, const nom::event::on_disconnected& event)
+        void operator()(nom::web_socket&, const nom::event::on_disconnected& event)
         {
-            LWARN("{} Disconnected: {}", connection.session_id(), event.reason);
+            LWARN("Disconnected: {}", event.reason);
             on_request(nom::event::service_command::stop);
         }
 
-        void operator()(nom::web_socket& connection, const nom::event::network_error& event)
+        void operator()(nom::web_socket&, const nom::event::network_error& event)
         {
-            LERROR("{} {}: {}", connection.session_id(), event.description, event.message);
+            LERROR("{}: {}", event.description, event.message);
             on_request(nom::event::service_command::stop);
         }
 
     private:
-        std::vector<std::unique_ptr<feed>> feeds_;
-        nom::asio::steady_timer connect_deadline_;
-        std::size_t pending_connections_{};
-        bool running_{false};
+        std::string request_;
+        nom::web_socket client_;
     };
 
     struct binance_perp_assembly
@@ -276,11 +215,10 @@ int main(int argc, char** argv)
 {
     if (argc == 2 && std::string_view(argv[1]) == "--help")
     {
-        std::cout << "Usage: binance_perp_feeder [--symbols BTCUSDT,ETHUSDT] [--channels ticker,trade,depth]\n"
-                     "                           [--market-endpoint wss://HOST/market/ws]\n"
-                     "                           [--public-endpoint wss://HOST/public/ws]\n"
-                     "Defaults: BTCUSDT, all three channels, Binance USD-M futures routed endpoints.\n"
-                     "trade selects aggTrade; ticker/trade use /market and depth uses /public.\n"
+        std::cout << "Usage: binance_perp_feeder [--symbols BTCUSDT,ETHUSDT]\n"
+                     "                           [--channels bookTicker,trade,depth@100ms] [--endpoint "
+                     "wss://HOST/public/ws]\n"
+                     "Defaults: BTCUSDT, all three channels, wss://fstream.binance.com/public/ws.\n"
                      "Log all incoming messages until disconnected or stopped with Ctrl+C.\n";
         return 0;
     }

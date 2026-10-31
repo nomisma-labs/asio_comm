@@ -6,7 +6,6 @@
 
 import argparse
 import base64
-from contextlib import ExitStack
 import hashlib
 import json
 import os
@@ -223,65 +222,60 @@ def run_disconnecting_case(client, context, certificate):
         print("disconnecting: passed (write failure, rejected sends, one terminal event, no timer rearm)")
 
 
-def run_feeder_case(client, context, certificate, options, routes):
-    errors, payloads, workers = [], [], []
-    event_names = {"ticker": "24hrTicker", "trade": "trade", "aggTrade": "aggTrade", "depth": "depthUpdate"}
-    ready = threading.Barrier(len(routes))
-    command = [client, *options]
-    with ExitStack() as stack:
-        for index, (option, target, streams) in enumerate(routes):
-            messages = ['{"result":null,"id":1}']
-            for stream in streams:
-                symbol, channel = stream.split("@")
-                messages.append(json.dumps({"e": event_names[channel], "s": symbol.upper()}, separators=(",", ":")))
-            payloads.extend(messages)
-            listener = stack.enter_context(socket.socket())
-            listener.bind(("127.0.0.1", 0))
-            listener.listen(1)
-            listener.settimeout(8)
-            port = listener.getsockname()[1]
-            command.extend([option, f"wss://localhost:{port}{target}"])
+def run_feeder_case(client, context, certificate, options, target, streams):
+    errors, payloads = [], ['{"result":null,"id":1}']
+    event_names = {"bookTicker": "bookTicker", "trade": "trade", "depth": "depthUpdate"}
+    for index, stream in enumerate(streams):
+        symbol, channel = stream.split("@", 1)
+        event_type = event_names[channel.split("@", 1)[0]]
+        message = {"e": event_type, "s": symbol.upper()}
+        if event_type == "trade":
+            message.update(t=index + 1, p="100", q="1", m=False)
+        payloads.append(json.dumps(message, separators=(",", ":")))
 
-            def serve(listener=listener, port=port, target=target, streams=streams, messages=messages, index=index):
-                try:
-                    raw, _ = listener.accept()
-                    with raw:
-                        raw.settimeout(8)
-                        with context.wrap_socket(raw, server_side=True) as connection:
-                            handshake(connection, port, target=target)
-                            kind, payload = read_frame(connection)
-                            assert kind == 0x81, "subscription must be a text frame"
-                            assert json.loads(payload) == {"method": "SUBSCRIBE", "params": streams, "id": 1}, payload
-                            for message in messages:
-                                encoded = message.encode()
-                                assert len(encoded) < 126
-                                connection.sendall(bytes((0x81, len(encoded))) + encoded)
-                            # The pong confirms reads progressed past every data message on this route.
-                            connection.sendall(b"\x89\x04feed")
-                            assert read_frame(connection) == (0x8A, b"feed"), "missing pong with matching payload"
-                            ready.wait(timeout=8)
-                            if index == 0:
-                                connection.sendall(b"\x88\x02\x03\xe8")
-                            # Closing one route must also cancel the other connection and its ping timer.
-                            assert connection.recv(1024) == b"", "feeder did not close after disconnection"
-                except BaseException as error:
-                    errors.append(error)
-                    ready.abort()
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(1)
+        listener.settimeout(8)
+        port = listener.getsockname()[1]
 
-            worker = threading.Thread(target=serve, daemon=True)
-            worker.start()
-            workers.append(worker)
+        def serve():
+            try:
+                raw, _ = listener.accept()
+                with raw:
+                    raw.settimeout(8)
+                    with context.wrap_socket(raw, server_side=True) as connection:
+                        handshake(connection, port, target=target)
+                        kind, payload = read_frame(connection)
+                        assert kind == 0x81, "subscription must be a text frame"
+                        assert json.loads(payload) == {"method": "SUBSCRIBE", "params": streams, "id": 1}, payload
+                        for message in payloads:
+                            encoded = message.encode()
+                            assert len(encoded) < 126
+                            connection.sendall(bytes((0x81, len(encoded))) + encoded)
+                        # The pong confirms reads progressed past every data message on this connection.
+                        connection.sendall(b"\x89\x04feed")
+                        assert read_frame(connection) == (0x8A, b"feed"), "missing pong with matching payload"
+                        connection.sendall(b"\x88\x02\x03\xe8")
+                        assert connection.recv(1024) == b"", "feeder did not close after disconnection"
+            except BaseException as error:
+                errors.append(error)
 
+        worker = threading.Thread(target=serve, daemon=True)
+        worker.start()
         env = dict(os.environ, SSL_CERT_FILE=str(certificate), SSL_CERT_DIR=str(certificate.parent / "empty"))
-        result = subprocess.run(command, env=env, text=True, capture_output=True, timeout=12)
-        for worker in workers:
-            worker.join(timeout=10)
-            assert not worker.is_alive(), "feeder: server did not stop"
+        result = subprocess.run(
+            [client, *options, "--endpoint", f"wss://localhost:{port}{target}"],
+            env=env, text=True, capture_output=True, timeout=12,
+        )
+        worker.join(timeout=10)
+        assert not worker.is_alive(), "feeder: server did not stop"
         assert not errors, f"feeder: server errors: {errors}; client: {result.stdout} {result.stderr}"
         assert result.returncode == 1 and "Disconnected:" in result.stdout, result.stdout + result.stderr
+        assert result.stdout.count("Connected:") == 1, result.stdout
         for payload in payloads:
             assert payload in result.stdout, f"missing logged payload: {payload}; output: {result.stdout}"
-        print(f"{Path(client).name}: passed ({len(routes)} route(s))")
+        print(f"{Path(client).name}: passed (one connection, {len(streams)} streams)")
 
 
 def main():
@@ -308,44 +302,30 @@ def main():
             run_case(args.client, context, certificate, case)
         run_headers_case(args.headers_client, context, certificate)
         run_disconnecting_case(args.disconnecting_client, context, certificate)
-        if args.feeder_client:
+        for client, target in ((args.feeder_client, "/ws"), (args.perp_feeder_client, "/public/ws")):
+            if not client:
+                continue
             run_feeder_case(
-                args.feeder_client, context, certificate, [],
-                [("--endpoint", "/ws", ["btcusdt@ticker", "btcusdt@trade", "btcusdt@depth"])],
+                client, context, certificate, [], target,
+                ["btcusdt@bookTicker", "btcusdt@trade", "btcusdt@depth@100ms"],
             )
             run_feeder_case(
-                args.feeder_client, context, certificate,
-                ["--symbols", "BTCUSDT,eThUsDt", "--channels", "trade,depth"],
-                [("--endpoint", "/ws", ["btcusdt@trade", "btcusdt@depth", "ethusdt@trade", "ethusdt@depth"])],
-            )
-        if args.perp_feeder_client:
-            run_feeder_case(
-                args.perp_feeder_client, context, certificate, [],
-                [("--market-endpoint", "/market/ws", ["btcusdt@ticker", "btcusdt@aggTrade"]),
-                 ("--public-endpoint", "/public/ws", ["btcusdt@depth"])],
+                client, context, certificate,
+                ["--symbols", "BTCUSDT,eThUsDt", "--channels", "trade,depth@100ms"], target,
+                ["btcusdt@trade", "btcusdt@depth@100ms", "ethusdt@trade", "ethusdt@depth@100ms"],
             )
             run_feeder_case(
-                args.perp_feeder_client, context, certificate,
-                ["--symbols", "BTCUSDT,eThUsDt", "--channels", "trade,depth"],
-                [("--market-endpoint", "/market/ws", ["btcusdt@aggTrade", "ethusdt@aggTrade"]),
-                 ("--public-endpoint", "/public/ws", ["btcusdt@depth", "ethusdt@depth"])],
-            )
-            # An unused route must not even construct a client for its invalid endpoint.
-            run_feeder_case(
-                args.perp_feeder_client, context, certificate,
-                ["--channels", "trade", "--public-endpoint", "unused"],
-                [("--market-endpoint", "/market/ws", ["btcusdt@aggTrade"])],
+                client, context, certificate, ["--channels", "bookTicker"], target, ["btcusdt@bookTicker"],
             )
             run_feeder_case(
-                args.perp_feeder_client, context, certificate,
-                ["--channels", "depth", "--market-endpoint", "unused"],
-                [("--public-endpoint", "/public/ws", ["btcusdt@depth"])],
+                client, context, certificate, ["--channels", "trade"], target, ["btcusdt@trade"],
             )
-        for client in filter(None, (args.feeder_client, args.perp_feeder_client)):
-            for options in (["--symbols", ""], ["--symbols", 'BTCUSDT"'], ["--channels", "unknown"]):
+            for options in (["--symbols", ""], ["--symbols", 'BTCUSDT"'],
+                            ["--channels", "unknown"], ["--channels", "aggTrade"]):
                 result = subprocess.run([client, *options], text=True, capture_output=True, timeout=3)
                 assert result.returncode == 1 and result.stderr and "Connecting" not in result.stdout, result
             print(f"{Path(client).name}: invalid settings rejected before connecting")
+
 
 
 if __name__ == "__main__":

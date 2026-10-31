@@ -19,16 +19,21 @@ With no arguments, the example connects to Postman's echo endpoint at
 `wss://ws.postman-echo.com/raw` and sends `hello`. Supply a URL to use another endpoint.
 The example connects, optionally sends one text message, prints the first received message,
 and calls `close()`. Supply a URL without a message to wait for an unsolicited server message.
-It schedules a 15-second deadline and exits with status 1
-on failure or timeout. The deadline cannot interrupt a blocking send. TLS verifies both the
+It exits with status 1 on failure. TLS verifies both the
 certificate chain and hostname; a private CA can be supplied
 using OpenSSL's `SSL_CERT_FILE` environment variable.
 
 ## Using the client
 
-The [web_socket implementation](../../core/asio_comm/web_socket.cppm) lives in one C++ module file.
+The client has a [module interface](../../core/asio_comm/web_socket.cppm) and a private
+[implementation unit](../../core/asio_comm/web_socket.cpp).
 Link `nom::asio_comm` and `import nom.asio_comm;`. It uses base's
 `NOM_ENUM` and `nom::url`, Assembly's `nom::delegate`, and the shared logger.
+
+The app owns its Boost.Asio context. Include `boost/asio/any_io_executor.hpp` and
+`boost/asio/io_context.hpp` before module imports, link `Boost::headers` directly, and use
+`boost::asio::io_context` in application code.
+The WebSocket module does not re-export these utilities.
 
 Source consumers must enable standard-library module detection before their first `project()`
 and use `IMPORT_STD` in their kit target helpers (or `nom_enable_std_modules(target)` for other targets);

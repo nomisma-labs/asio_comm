@@ -16,7 +16,7 @@ cmake --build --preset dev --target deribit_perp_feeder
 ```
 
 The app runs until Ctrl+C or disconnection. Connection failures and disconnections exit with
-status 1; there is no automatic reconnect. Connection setup has a 30-second deadline.
+status 1; there is no automatic reconnect.
 
 ## Configuration and subscriptions
 
@@ -50,11 +50,11 @@ borrowed payload during its callback. See the [WebSocket contract](../../docs/we
 - `asio_service` contributes the shared `io_context` through its `context_mixin`.
 - `market_data_logger` handles `nom::event::market_data` responses and logs the payload.
 - `deribit_perp_client` handles `nom::event::service_command` requests, owns the WebSocket
-  connections and timers, and adapts WebSocket callbacks into market-data responses.
+  connections, and adapts WebSocket callbacks into market-data responses.
 
 `app` derives from `nom::relay<deribit_perp_assembly>`. Its `start()` sends the start command
 through the relay and runs the context. The client sends each received payload back through
-`pass_response()` to the logger. Stop commands cancel timers and close the connections.
+`pass_response()` to the logger. Stop commands close the connections.
 
 Relay delivery is synchronous on the same thread as the WebSocket callbacks. Market-data events
 borrow their source and payload views only for that call; no payload copy or queue is introduced.

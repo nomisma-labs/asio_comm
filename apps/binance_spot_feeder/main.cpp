@@ -8,6 +8,9 @@
 
 #include <spd_logger/logging.h>
 
+#include <boost/asio/any_io_executor.hpp>
+#include <boost/asio/io_context.hpp>
+
 import std;
 import nom.asio_comm;
 import nom.assembly;
@@ -36,7 +39,7 @@ namespace
     {
         std::string endpoint{"wss://stream.binance.com:443/ws"};
         std::vector<std::string> symbols{"BTCUSDT"};
-        std::vector<std::string> channels{"ticker", "trade", "depth"};
+        std::vector<std::string> channels{"bookTicker", "trade", "depth@100ms"};
         nom::log_config log{.level = nom::log_level::info};
     };
 
@@ -76,8 +79,9 @@ namespace
             throw std::invalid_argument("A connection supports at most 1024 streams");
         for (const auto& channel : config.channels)
         {
-            if (channel != "ticker" && channel != "trade" && channel != "depth")
-                throw std::invalid_argument("Unknown channel: " + channel + " (expected ticker, trade or depth)");
+            if (channel != "bookTicker" && channel != "trade" && channel != "depth" && channel != "depth@100ms")
+                throw std::invalid_argument("Unknown channel: " + channel +
+                                            " (expected bookTicker, trade, depth or depth@100ms)");
         }
 
         std::string request = R"({"method":"SUBSCRIBE","params":[)";
@@ -111,7 +115,7 @@ namespace
         struct context_mixin
         {
             // The assembly constructs context services before nodes and destroys them after nodes.
-            nom::asio::io_context io;
+            boost::asio::io_context io;
         };
     };
 
@@ -127,8 +131,8 @@ namespace
     {
     public:
         explicit binance_spot_client(const app_config& config)
-            : requests_({subscription_request(config)}),
-              client_(nom::ctx(this).io.get_executor(), nom::url(config.endpoint)), connect_deadline_(nom::ctx(this).io)
+            : request_(subscription_request(config)),
+              client_(nom::ctx(this).io.get_executor(), nom::url(config.endpoint))
         {
         }
 
@@ -138,16 +142,6 @@ namespace
             {
             case nom::event::service_command::start:
             {
-                connect_deadline_.expires_after(std::chrono::seconds(30));
-                connect_deadline_.async_wait(
-                    [this](const nom::asio::error_code& error)
-                    {
-                        if (!error)
-                        {
-                            LERROR("Connection timed out");
-                            on_request(nom::event::service_command::stop);
-                        }
-                    });
                 std::ostringstream address;
                 address << client_.url();
                 LINFO("Connecting to {}", address.str());
@@ -155,7 +149,6 @@ namespace
                 break;
             }
             case nom::event::service_command::stop:
-                connect_deadline_.cancel();
                 client_.close();
                 break;
             }
@@ -163,17 +156,12 @@ namespace
 
         void operator()(nom::web_socket& connection, const nom::event::on_connected&)
         {
-            connect_deadline_.cancel();
             LINFO("Connected: {}", connection.session_id());
-            for (const auto& request : requests_)
+            LINFO("Subscribing: {}", request_);
+            if (!connection.send(request_))
             {
-                LINFO("Subscribing: {}", request);
-                if (!connection.send(request))
-                {
-                    LERROR("Subscription send failed");
-                    on_request(nom::event::service_command::stop);
-                    return;
-                }
+                LERROR("Subscription send failed");
+                on_request(nom::event::service_command::stop);
             }
         }
 
@@ -197,9 +185,8 @@ namespace
         }
 
     private:
-        std::vector<std::string> requests_;
+        std::string request_;
         nom::web_socket client_;
-        nom::asio::steady_timer connect_deadline_;
     };
 
     struct binance_spot_assembly
@@ -227,7 +214,7 @@ int main(int argc, char** argv)
     if (argc == 2 && std::string_view(argv[1]) == "--help")
     {
         std::cout << "Usage: binance_spot_feeder [--symbols BTCUSDT,ETHUSDT]\n"
-                     "                           [--channels ticker,trade,depth] [--endpoint wss://HOST/ws]\n"
+                     "                           [--channels bookTicker,trade,depth@100ms] [--endpoint wss://HOST/ws]\n"
                      "Defaults: BTCUSDT, all three channels, wss://stream.binance.com:443/ws.\n"
                      "Log all incoming messages until disconnected or stopped with Ctrl+C.\n";
         return 0;

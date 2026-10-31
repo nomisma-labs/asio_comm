@@ -7,6 +7,9 @@
 #include <cstdio>
 #endif
 
+#include <boost/asio/any_io_executor.hpp>
+#include <boost/asio/io_context.hpp>
+
 import std;
 import nom.asio_comm;
 import nom.spd_logger;
@@ -18,36 +21,20 @@ int main(int argc, char** argv)
         std::cout << "Usage: web_socket_example [wss://HOST[:PORT]/PATH [MESSAGE]]\n"
                      "With no arguments, send hello to wss://ws.postman-echo.com/raw.\n"
                      "Send an optional text message, print the first reply, then close.\n"
-                     "With a URL but no MESSAGE, wait for the server's first message. Timeout: 15 seconds.\n";
+                     "With a URL but no MESSAGE, wait for the server's first message.\n";
         return argc == 2 && std::string_view(argv[1]) == "--help" ? 0 : 1;
     }
 
     try
     {
         nom::init_logger(nom::main_logger);
-        nom::asio::io_context io;
+        boost::asio::io_context io;
         const char* endpoint = argc > 1 ? argv[1] : "wss://ws.postman-echo.com/raw";
         const char* message = argc == 1 ? "hello" : (argc == 3 ? argv[2] : nullptr);
         nom::web_socket client(io.get_executor(), nom::url(endpoint));
-        nom::asio::steady_timer deadline(io, std::chrono::seconds(15));
         int result = 1;
 
-        // One io_context thread serializes the client, its callbacks, and the deadline.
-        const auto finish = [&]
-        {
-            deadline.cancel();
-            client.close();
-        };
-        deadline.async_wait(
-            [&](const nom::asio::error_code& error)
-            {
-                if (!error)
-                {
-                    std::cerr << "Timed out waiting for a WebSocket message\n";
-                    finish();
-                }
-            });
-
+        // One io_context thread serializes the client and its callbacks.
         client.connect(nom::web_socket::delegate{
             [&](nom::web_socket& connection, const auto& event)
             {
@@ -58,24 +45,24 @@ int main(int argc, char** argv)
                     if (message && !connection.send(message))
                     {
                         std::cerr << "Send failed\n";
-                        finish();
+                        client.close();
                     }
                 }
                 else if constexpr (std::same_as<event_type, nom::event::ws_data>)
                 {
                     std::cout << "Received: " << event.sv_data() << '\n';
                     result = 0;
-                    finish();
+                    client.close();
                 }
                 else if constexpr (std::same_as<event_type, nom::event::on_disconnected>)
                 {
                     std::cerr << "Disconnected before receiving a message: " << event.reason << '\n';
-                    finish();
+                    client.close();
                 }
                 else if constexpr (std::same_as<event_type, nom::event::network_error>)
                 {
                     std::cerr << event.description << ": " << event.message << '\n';
-                    finish();
+                    client.close();
                 }
             }});
 

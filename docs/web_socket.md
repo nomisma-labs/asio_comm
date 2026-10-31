@@ -1,7 +1,7 @@
 # WebSocket
 
-This records the current implementation in
-[`web_socket.cppm`](../core/asio_comm/web_socket.cppm). The diagram describes
+This records the public [module interface](../core/asio_comm/web_socket.cppm) and
+the [session implementation](../core/asio_comm/web_socket.cpp). The diagram describes
 one `web_socket::session`; every public `connect()` creates a new session and closes any old
 one. Usage examples are in the [WebSocket example README](../apps/web_socket_example/README.md).
 Usage constraints, deferred work and validation coverage follow the event descriptions.
@@ -275,7 +275,7 @@ These are outputs of the current machine, shown as actions on edges:
   or automatic control-frame writes still needs review: serialized handlers alone do not
   prevent asynchronous operations from overlapping.
 - **Liveness.** The idle timer runs even with outbound pings disabled and can close a healthy
-  but quiet connection. DNS has no library deadline; the example supplies an overall deadline.
+  but quiet connection. DNS has no library deadline; an overall connection deadline remains WIP.
 - **Exceptions after connection — deferred.** Read/ping/timer initiation, control-callback
   installation and graceful-close initiation can throw with other operations pending and the
   session still connected or disconnecting. These paths have no automatic notification/cleanup

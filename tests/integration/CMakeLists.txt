@@ -10,9 +10,9 @@ if(nom_build_tests AND TARGET web_socket_example)
     block(SCOPE_FOR VARIABLES)
         set(nom_install OFF)
         nom_app(asio_comm_headers_client IMPORT_STD SOURCES web_socket/headers_test.cxx
-            DEPS nom::asio_comm nom::spd_logger)
+            DEPS Boost::headers nom::asio_comm nom::spd_logger)
         nom_app(asio_comm_disconnecting_client IMPORT_STD SOURCES web_socket/disconnecting_test.cxx
-            DEPS nom::asio_comm nom::spd_logger)
+            DEPS Boost::headers nom::asio_comm nom::spd_logger)
     endblock()
 
     find_package(Python 3.10 REQUIRED COMPONENTS Interpreter)

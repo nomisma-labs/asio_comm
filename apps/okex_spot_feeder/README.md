@@ -16,7 +16,7 @@ cmake --build --preset dev --target okex_spot_feeder
 ```
 
 The app runs until Ctrl+C or disconnection. Connection failures and disconnections exit with
-status 1; there is no automatic reconnect. Connection setup has a 30-second deadline.
+status 1; there is no automatic reconnect.
 
 ## Configuration and subscriptions
 

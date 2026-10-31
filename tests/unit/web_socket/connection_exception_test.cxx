@@ -3,6 +3,9 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <boost/asio/any_io_executor.hpp>
+#include <boost/asio/io_context.hpp>
+
 import std;
 import nom.asio_comm;
 import nom.spd_logger;
@@ -63,7 +66,7 @@ namespace
 TEST_CASE("Connection initiation exceptions leave a failed session and preserve the exception")
 {
     nom::init_logger(nom::main_logger);
-    nom::asio::io_context io;
+    boost::asio::io_context io;
     nom::web_socket client(io.get_executor(), nom::url("wss://127.0.0.1:1/"));
     unsigned calls = 0;
     const nom::web_socket::delegate callbacks{[&](nom::web_socket&, const auto&) { ++calls; }};
@@ -102,7 +105,7 @@ TEST_CASE("Closing suppresses resolver cancellation allocation failure and queue
     STATIC_REQUIRE(noexcept(std::declval<nom::web_socket&>().close()));
 
     nom::init_logger(nom::main_logger);
-    nom::asio::io_context io;
+    boost::asio::io_context io;
     nom::web_socket client(io.get_executor(), nom::url("wss://127.0.0.1:1/"));
     unsigned calls = 0;
     client.connect(nom::web_socket::delegate{[&](nom::web_socket&, const auto&) { ++calls; }});

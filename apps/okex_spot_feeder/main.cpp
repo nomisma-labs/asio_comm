@@ -8,6 +8,11 @@
 
 #include <spd_logger/logging.h>
 
+#include <boost/asio/any_io_executor.hpp>
+#include <boost/asio/io_context.hpp>
+#include <boost/asio/steady_timer.hpp>
+#include <boost/system/error_code.hpp>
+
 import std;
 import nom.asio_comm;
 import nom.assembly;
@@ -119,7 +124,7 @@ namespace
         struct context_mixin
         {
             // The assembly constructs context services before nodes and destroys them after nodes.
-            nom::asio::io_context io;
+            boost::asio::io_context io;
         };
     };
 
@@ -136,8 +141,7 @@ namespace
     public:
         explicit okex_spot_client(const app_config& config)
             : requests_(subscription_requests(config)),
-              client_(nom::ctx(this).io.get_executor(), nom::url(config.endpoint)),
-              connect_deadline_(nom::ctx(this).io), ping_timer_(nom::ctx(this).io)
+              client_(nom::ctx(this).io.get_executor(), nom::url(config.endpoint)), ping_timer_(nom::ctx(this).io)
         {
         }
 
@@ -147,16 +151,6 @@ namespace
             {
             case nom::event::service_command::start:
             {
-                connect_deadline_.expires_after(std::chrono::seconds(30));
-                connect_deadline_.async_wait(
-                    [this](const nom::asio::error_code& error)
-                    {
-                        if (!error)
-                        {
-                            LERROR("Connection timed out");
-                            on_request(nom::event::service_command::stop);
-                        }
-                    });
                 std::ostringstream address;
                 address << client_.url();
                 LINFO("Connecting to {}", address.str());
@@ -164,7 +158,6 @@ namespace
                 break;
             }
             case nom::event::service_command::stop:
-                connect_deadline_.cancel();
                 ping_timer_.cancel();
                 client_.close();
                 break;
@@ -173,7 +166,6 @@ namespace
 
         void operator()(nom::web_socket& connection, const nom::event::on_connected&)
         {
-            connect_deadline_.cancel();
             LINFO("Connected: {}", connection.session_id());
             for (const auto& request : requests_)
             {
@@ -213,7 +205,7 @@ namespace
         {
             ping_timer_.expires_after(std::chrono::seconds(20));
             ping_timer_.async_wait(
-                [this](const nom::asio::error_code& error)
+                [this](const boost::system::error_code& error)
                 {
                     if (error || !client_.is_connected())
                         return;
@@ -229,8 +221,7 @@ namespace
 
         std::vector<std::string> requests_;
         nom::web_socket client_;
-        nom::asio::steady_timer connect_deadline_;
-        nom::asio::steady_timer ping_timer_;
+        boost::asio::steady_timer ping_timer_;
     };
 
     struct okex_spot_assembly : nom::assembly<okex_spot_assembly, asio_service, market_data_logger, okex_spot_client>

@@ -3,13 +3,16 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <boost/asio/any_io_executor.hpp>
+#include <boost/asio/io_context.hpp>
+
 import std;
 import nom.asio_comm;
 import nom.spd_logger;
 
 TEST_CASE("WebSocket uses the base URL and enum utilities")
 {
-    nom::asio::io_context io;
+    boost::asio::io_context io;
     nom::url address("wss", "localhost", 9443, "/feed%2Fone?topic=two");
     nom::web_socket client(io.get_executor(), address);
     address = nom::url("wss://other.example/"); // The client owns its endpoint.
@@ -27,7 +30,7 @@ TEST_CASE("WebSocket uses the base URL and enum utilities")
 
 TEST_CASE("WebSocket endpoint components use a validated wss URL")
 {
-    nom::asio::io_context io;
+    boost::asio::io_context io;
     nom::web_socket client(io.get_executor(), "localhost", 9443, "/feed%2Fone?topic=two");
     CHECK(client.url().scheme() == "wss");
     CHECK(client.url().host() == "localhost");
@@ -44,7 +47,7 @@ TEST_CASE("WebSocket endpoint components use a validated wss URL")
 TEST_CASE("Disconnected WebSocket rejects sends and tolerates repeated close")
 {
     nom::init_logger(nom::main_logger);
-    nom::asio::io_context io;
+    boost::asio::io_context io;
     nom::web_socket client(io.get_executor(), nom::url("wss://localhost/"));
     CHECK_FALSE(client.send("hello"));
     client.close();
@@ -55,7 +58,7 @@ TEST_CASE("Disconnected WebSocket rejects sends and tolerates repeated close")
 TEST_CASE("Closing or destroying while resolving suppresses queued events")
 {
     nom::init_logger(nom::main_logger);
-    nom::asio::io_context io;
+    boost::asio::io_context io;
     unsigned calls = 0;
     const nom::web_socket::delegate callbacks{[&](nom::web_socket&, const auto&) { ++calls; }};
     {

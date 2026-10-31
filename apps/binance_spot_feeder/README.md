@@ -13,36 +13,38 @@ cmake --build --preset dev --target binance_spot_feeder
 ./build/dev/bin/binance_spot_feeder
 ```
 
-The defaults select `BTCUSDT` and all three channels. Override the selection with comma-separated lists:
+The defaults select `BTCUSDT` with `bookTicker`, `trade`, and `depth@100ms`. Override the selection with comma-separated lists:
 
 ```bash
-./build/dev/bin/binance_spot_feeder --symbols BTCUSDT,ETHUSDT --channels trade,depth
-./build/dev/bin/binance_spot_feeder --symbols BTCUSDT --channels ticker
+./build/dev/bin/binance_spot_feeder --symbols BTCUSDT,ETHUSDT --channels trade,depth@100ms
+./build/dev/bin/binance_spot_feeder --symbols BTCUSDT --channels bookTicker
 ./build/dev/bin/binance_spot_feeder --help
 ```
 
 The app runs until interrupted with Ctrl+C or disconnected. Connection failures and disconnects
-exit with status 1; there is no automatic reconnect. A 30-second deadline covers connection setup.
+exit with status 1; there is no automatic reconnect.
 
 ## Configuration and streams
 
 Defaults live in `app_config` in [main.cpp](main.cpp), including `nom::log_config`.
 `--symbols`, `--channels`, and `--endpoint` override the corresponding C++ settings.
 Symbols accept ASCII letters and digits and are converted to lowercase for subscriptions.
-Channel names are case-sensitive. No configuration file or JSON configuration library is used.
+Channel names are case-sensitive and sent unchanged; supported values are `bookTicker`,
+`trade`, `depth`, and `depth@100ms`. No configuration file or JSON configuration library is used.
 
 The default endpoint is `wss://stream.binance.com:443/ws`. On connection, the app sends one
 `SUBSCRIBE` request containing every selected symbol/channel combination:
 
 ```json
-{"method":"SUBSCRIBE","params":["btcusdt@ticker","btcusdt@trade","btcusdt@depth"],"id":1}
+{"method":"SUBSCRIBE","params":["btcusdt@bookTicker","btcusdt@trade","btcusdt@depth@100ms"],"id":1}
 ```
 
 | Channel | Stream | Data |
 | --- | --- | --- |
-| `ticker` | `<symbol>@ticker` | Rolling 24-hour statistics, updated every second |
+| `bookTicker` | `<symbol>@bookTicker` | Best bid/ask price and quantity updates |
 | `trade` | `<symbol>@trade` | Individual trades as they occur |
-| `depth` | `<symbol>@depth` | Incremental order-book updates at the default one-second interval |
+| `depth@100ms` | `<symbol>@depth@100ms` | Incremental order-book updates at the requested 100 ms interval |
+| `depth` | `<symbol>@depth` | Incremental updates at the server's default interval |
 
 These names, intervals, and the subscription format follow the
 [Binance Spot stream specification](https://github.com/binance/binance-spot-api-docs/blob/master/web-socket-streams.md).
@@ -60,12 +62,11 @@ for the client's current execution and lifetime contract.
 
 - `asio_service` contributes the shared `io_context` through its `context_mixin`.
 - `market_data_logger` handles `nom::event::market_data` responses and logs the payload.
-- `binance_spot_client` handles `nom::event::service_command` requests, owns the WebSocket
-  connections and timers, and adapts WebSocket callbacks into market-data responses.
+- `binance_spot_client` handles `nom::event::service_command` requests, owns one WebSocket and one subscription request, and adapts WebSocket callbacks into market-data responses.
 
 `app` derives from `nom::relay<binance_spot_assembly>`. Its `start()` sends the start command
 through the relay and runs the context. The client sends each received payload back through
-`pass_response()` to the logger. Stop commands cancel timers and close the connections.
+`pass_response()` to the logger. Stop commands close the connection.
 
 Relay delivery is synchronous on the same thread as the WebSocket callbacks. Market-data events
 borrow their source and payload views only for that call; no payload copy or queue is introduced.

@@ -1,7 +1,8 @@
 # Binance perpetual futures feeder
 
-`binance_perp_feeder` logs public Binance USDⓈ-M perpetual futures market data using
-`nom::web_socket` and `spd_logger`. Defaults are `BTCUSDT` with `ticker`, `trade`, and `depth`.
+`binance_perp_feeder` logs streaming Binance USDⓈ-M perpetual futures market data using
+one `nom::web_socket` connection. Defaults are `BTCUSDT` with `bookTicker`, `trade`, and
+`depth@100ms`. No API key is required.
 
 ## Build and run
 
@@ -11,74 +12,68 @@ Follow the shared [build prerequisites](../../docs/kit/build.md#toolchain). From
 cmake --preset dev
 cmake --build --preset dev --target binance_perp_feeder
 ./build/dev/bin/binance_perp_feeder
-./build/dev/bin/binance_perp_feeder --symbols BTCUSDT,ETHUSDT --channels trade,depth
-./build/dev/bin/binance_perp_feeder --channels ticker
+./build/dev/bin/binance_perp_feeder --symbols BTCUSDT,ETHUSDT --channels trade,depth@100ms
+./build/dev/bin/binance_perp_feeder --channels bookTicker
 ./build/dev/bin/binance_perp_feeder --help
 ```
 
-The app runs until Ctrl+C or a connection ends. A connection error or disconnection closes
-all active feeds and exits with status 1. There is no automatic reconnect. A 30-second deadline
-covers setup of all selected connections.
+The app runs until Ctrl+C or disconnection, then exits with status 1. There is no automatic
+reconnect or application connection deadline. Client deadline handling remains WIP.
 
-## Configuration and routing
+## Configuration and streams
 
 Settings live in `app_config` in [main.cpp](main.cpp), including `nom::log_config`.
-`--symbols` and `--channels` accept comma-separated lists. Symbols accept ASCII letters and
-digits and are normalized to lowercase; channel names are case-sensitive. Use perpetual
-contract symbols such as `BTCUSDT` or `ETHUSDT`. No configuration file or JSON configuration
-library is needed.
+`--symbols`, `--channels`, and `--endpoint` override the C++ settings. Symbols accept ASCII
+letters and digits and are normalized to lowercase. Channel names are case-sensitive and
+are sent unchanged; supported values are `bookTicker`, `trade`, `depth`, and `depth@100ms`.
+No configuration file or JSON configuration library is needed.
 
-Binance routes these streams to two endpoints. The app opens only the routes needed by the
-selected channels, sends one `SUBSCRIBE` request per connection, and runs both on one
-`io_context` thread.
+The default endpoint is `wss://fstream.binance.com/public/ws`. On connection, the app sends
+one `SUBSCRIBE` request containing every selected symbol/channel combination:
 
-| Channel | Subscription stream | Route | Data |
-| --- | --- | --- | --- |
-| `ticker` | `<symbol>@ticker` | `/market/ws` | Rolling 24-hour statistics, every two seconds |
-| `trade` | `<symbol>@aggTrade` | `/market/ws` | Aggregate trade updates, every 100 ms |
-| `depth` | `<symbol>@depth` | `/public/ws` | Incremental depth updates, default 250 ms |
+```json
+{"method":"SUBSCRIBE","params":["btcusdt@bookTicker","btcusdt@trade","btcusdt@depth@100ms"],"id":1}
+```
 
-The futures `trade` option selects **aggregate trades**, unlike the Spot example's individual trades.
-See Binance's [market streams](https://developers.binance.com/en/docs/catalog/core-trading-derivatives-trading-usd-s-m-futures/api/ws-streams/market)
-and [public streams](https://developers.binance.com/en/docs/catalog/core-trading-derivatives-trading-usd-s-m-futures/api/ws-streams/public)
-for payloads and update intervals.
+| Channel | Received event | Data |
+| --- | --- | --- |
+| `bookTicker` | `bookTicker` | Best bid/ask price and quantity updates |
+| `trade` | `trade` | Individual trades with a trade ID (`t`), price (`p`), quantity (`q`), and trade time (`T`) |
+| `depth@100ms` | `depthUpdate` | Incremental order-book changes at the requested 100 ms interval |
+| `depth` | `depthUpdate` | Incremental changes at the server's default interval |
 
-Defaults are `wss://fstream.binance.com/market/ws` and `wss://fstream.binance.com/public/ws`.
-`--market-endpoint` and `--public-endpoint` override them, for example when testing with a local TLS peer.
-An unrouted `/ws` connection does not deliver market-route streams under Binance's current
-[connection rules](https://developers.binance.com/en/docs/products/derivatives-trading-usds-futures/websocket-market-streams/Connect).
-Each connection supports up to 1024 streams and expires after 24 hours.
+Book ticker and depth are documented in Binance's
+[public stream catalog](https://developers.binance.com/en/docs/catalog/core-trading-derivatives-trading-usd-s-m-futures/api/ws-streams/public).
+Raw `trade` delivery was verified directly on the public endpoint on 2026-10-31: one connection
+received `trade`, `bookTicker`, and `depthUpdate` events together. The current published
+[market stream catalog](https://developers.binance.com/en/docs/catalog/core-trading-derivatives-trading-usd-s-m-futures/api/ws-streams/market)
+lists aggregate trades but does not list this raw trade stream. Live behavior and published
+API coverage are distinct evidence; this example subscribes to `trade` without substituting
+`aggTrade`.
 
-The WebSocket client answers server ping frames while reading. This app also enables outbound
-pings so incoming pongs keep its idle timer active on quiet subscriptions; Binance's server pings
-alone are three minutes apart.
+The WebSocket client answers server pings while reading. Outbound control pings are enabled
+so received pongs keep the client's idle timer active on quiet subscriptions.
 
-Every received payload is logged unchanged, with a session identifier identifying its route.
-Subscription acknowledgements and API errors are logged too. The app does not parse them,
-reconstruct an order book, or store data separately. The [WebSocket constraints](../../docs/web_socket.md#usage-constraints-and-deferred-work)
-describe the client's execution and lifetime contract.
+Every payload is logged unchanged, including subscription acknowledgements and API errors.
+The app does not parse messages, reconcile snapshots, reconstruct an order book, or subscribe
+to private data. See the [WebSocket constraints](../../docs/web_socket.md#usage-constraints-and-deferred-work).
 
 ## Assembly structure
 
-`binance_perp_assembly` in [main.cpp](main.cpp) composes three nodes:
+`binance_perp_assembly` composes three nodes:
 
-- `asio_service` contributes the shared `io_context` through its `context_mixin`.
-- `market_data_logger` handles `nom::event::market_data` responses and logs the payload.
-- `binance_perp_client` handles `nom::event::service_command` requests, owns the WebSocket
-  connections and timers, and adapts WebSocket callbacks into market-data responses.
+- `asio_service` owns the shared `boost::asio::io_context` in its context mixin.
+- `binance_perp_client` owns one WebSocket and one subscription request for all selected streams.
+- `market_data_logger` logs the raw payloads relayed by the client.
 
-`app` derives from `nom::relay<binance_perp_assembly>`. Its `start()` sends the start command
-through the relay and runs the context. The client sends each received payload back through
-`pass_response()` to the logger. Stop commands cancel timers and close the connections.
-
-Relay delivery is synchronous on the same thread as the WebSocket callbacks. Market-data events
-borrow their source and payload views only for that call; no payload copy or queue is introduced.
-The assembly context outlives its nodes, and the app stays alive while the context runs.
+`app` starts the client through the relay and runs the context on one thread. Stop closes
+that connection. Relay delivery is synchronous; payload/source views are borrowed only during
+that call. The context outlives the nodes, and the app remains alive while the context runs.
 
 ## Validation
 
-The local TLS integration checks verify routed subscriptions, aggregate trade names, multiple
-symbols, selection of a single route, logging, ping/pong handling, and closing both connections
-when one disconnects. They need no Binance access.
+The local TLS integration checks verify one connection with multiple symbols and channels,
+exact `trade` subscriptions, individual-trade payload logging, channel selection, ping/pong,
+and disconnection cleanup. They use a local peer and do not establish exchange availability.
 
 See the [Spot feeder](../binance_spot_feeder/README.md) and [project overview](../../README.md).

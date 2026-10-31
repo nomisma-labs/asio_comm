@@ -13,10 +13,10 @@ initial TLS WebSocket client, public exchange market-data feeders, and WebSocket
 
 ## Example applications
 
-- [Binance Spot feeder](apps/binance_spot_feeder/README.md): subscribe to ticker, trade and depth
+- [Binance Spot feeder](apps/binance_spot_feeder/README.md): subscribe to best bid/ask, individual trades and depth
   streams for selected symbols and log incoming messages.
-- [Binance perpetual futures feeder](apps/binance_perp_feeder/README.md): log USDⓈ-M ticker,
-  aggregate trade and depth streams through Binance's routed endpoints.
+- [Binance perpetual futures feeder](apps/binance_perp_feeder/README.md): log USDⓈ-M best bid/ask,
+  individual trades and depth streams on one connection.
 - [Bitflyer Spot feeder](apps/bitflyer_spot_feeder/README.md): log ticker, executions and board data.
 - [Deribit perpetual futures feeder](apps/deribit_perp_feeder/README.md): log public ticker,
   trades and order-book updates.
