@@ -13,6 +13,8 @@ if(nom_build_tests AND TARGET web_socket_example)
             DEPS Boost::headers nom::asio_comm nom::spd_logger)
         nom_app(asio_comm_disconnecting_client IMPORT_STD SOURCES web_socket/disconnecting_test.cxx
             DEPS Boost::headers nom::asio_comm nom::spd_logger)
+        nom_app(asio_comm_move_client IMPORT_STD SOURCES web_socket/move_test.cxx
+            DEPS Boost::headers nom::asio_comm nom::spd_logger)
     endblock()
 
     find_package(Python 3.10 REQUIRED COMPONENTS Interpreter)
@@ -28,6 +30,7 @@ if(nom_build_tests AND TARGET web_socket_example)
         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/web_socket/loopback_test.py
             --client $<TARGET_FILE:web_socket_example>
             --headers-client $<TARGET_FILE:asio_comm_headers_client>
+            --move-client $<TARGET_FILE:asio_comm_move_client>
             --disconnecting-client $<TARGET_FILE:asio_comm_disconnecting_client> --openssl ${openssl_executable}
             ${binance_feeder_args})
     set_tests_properties(${PROJECT_NAME}_web_socket_loopback PROPERTIES LABELS integration TIMEOUT 60)

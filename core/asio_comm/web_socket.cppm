@@ -97,8 +97,9 @@ export namespace nom
     // DONE TODO[WS-INIT] (stage WS-02): Introduce init (a session should start in init, not in disconnected).
     // DONE TODO[WS-FAILURE-NAME] (stage WS-02): Rename failed to conn_failed.
     // DONE TODO[WS-TERMINAL-FAILURE] (stage WS-02): Make conn_failed terminal, on the same level as disconnected.
-    // DONE TODO[WS-DETACH] (stage WS-02): Any terminal state (disconnected, conn_failed) should also be
+    // RETIRED TODO[WS-DETACH] (stage WS-02): Any terminal state (disconnected, conn_failed) should also be
     // detached from the parent.
+    // Retain the parent link in every state; terminal status suppresses late completions.
     NOM_ENUM(ws_status, std::uint8_t, init, connecting, connected, disconnecting, conn_failed, disconnected)
 
     // TODO[WS-CABLE-LOSS] (stage WS-06): Reproduce hard disconnection (unplug the network cable).
@@ -125,12 +126,11 @@ export namespace nom
                    std::string_view host,
                    std::uint16_t port,
                    std::string_view target);
-        ~web_socket();
-
         web_socket(const web_socket&) = delete;
         web_socket& operator=(const web_socket&) = delete;
-        web_socket(web_socket&&) = delete;
-        web_socket& operator=(web_socket&&) = delete;
+        web_socket(web_socket&&);
+        web_socket& operator=(web_socket&&) noexcept;
+        ~web_socket();
 
         [[nodiscard]] const std::string& session_id() const noexcept;
         [[nodiscard]] ws_status status() const noexcept;
@@ -139,14 +139,8 @@ export namespace nom
             return ws_status::connected == status();
         }
 
-        void update_delegate(const delegate& callbacks)
-        {
-            delegate_ = callbacks;
-        }
-        [[nodiscard]] const delegate& callbacks() const noexcept
-        {
-            return delegate_;
-        }
+        void update_delegate(const delegate& callbacks);
+        [[nodiscard]] const delegate& callbacks() const noexcept;
 
         ws_params& params() noexcept
         {
@@ -172,12 +166,12 @@ export namespace nom
         }
 
     private:
-        delegate delegate_;
-        std::unique_ptr<io_state> io_;
-        // Always present; pending handlers share ownership so cancellation need not wait for completion.
-        std::shared_ptr<session> session_;
-        ::nom::url url_;
+        void swap_state(web_socket& other) noexcept;
+
         ws_params params_;
+        ::nom::url url_;
+        std::unique_ptr<io_state> io_;
+        std::shared_ptr<session> session_;
     };
 
 } // namespace nom

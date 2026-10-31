@@ -97,7 +97,12 @@ int main(int argc, char** argv)
                                            {.name = "X-Attempt", .value = "first"},
                                            {.name = "User-Agent", .value = "headers-test/1"}};
                 client.params().agent_name = "overridden-by-header";
-                client.connect(callbacks);
+                client.connect(nom::web_socket::delegate{[&](nom::web_socket&, const auto&)
+                                                         {
+                                                             std::cerr << "Callback replacement did not take effect\n";
+                                                             finish();
+                                                         }});
+                client.update_delegate(callbacks);
                 // The handshake reads live params, including edits after connect() returns.
                 client.params().headers.front().value = "Bearer updated";
             }
@@ -105,13 +110,13 @@ int main(int argc, char** argv)
             {
                 client.params().headers = {{.name = "Authorization", .value = "Bearer second"},
                                            {.name = "X-Attempt", .value = "second"}};
-                client.connect(callbacks);
+                client.connect(client.callbacks());
                 client.params().agent_name = "headers-test/2";
             }
             else if (attempt == 2)
             {
                 // Headers and agent persist; the peer also checks repeated configured outbound pings.
-                client.connect(callbacks);
+                client.connect(client.callbacks());
                 client.params().enable_outbound_ping = true;
                 client.params().ping_interval_sec = 1;
             }
@@ -124,7 +129,7 @@ int main(int argc, char** argv)
             else
             {
                 client.params() = {}; // Explicitly restore defaults, including empty headers.
-                client.connect(callbacks);
+                client.connect(client.callbacks());
             }
 
             io.run();

@@ -135,6 +135,42 @@ def run_case(client, context, certificate, case):
         print(f"{case}: passed")
 
 
+def run_move_case(client, context, certificate, mode):
+    errors = []
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(1)
+        listener.settimeout(8)
+        port = listener.getsockname()[1]
+
+        def serve():
+            try:
+                raw, _ = listener.accept()
+                with raw:
+                    raw.settimeout(8)
+                    with context.wrap_socket(raw, server_side=True) as connection:
+                        handshake(connection, port, {"x-move": "source"})
+                        assert read_frame(connection) == (0x81, b"moved")
+                        assert read_frame(connection) == (0x89, b""), "missing heartbeat after move"
+                        connection.sendall(b"\x8a\x00\x81\x08accepted")
+                        assert connection.recv(1024) == b"", "moved client did not close"
+            except BaseException as error:
+                errors.append(error)
+
+        worker = threading.Thread(target=serve, daemon=True)
+        worker.start()
+        env = dict(os.environ, SSL_CERT_FILE=str(certificate), SSL_CERT_DIR=str(certificate.parent / "empty"))
+        result = subprocess.run(
+            [client, f"wss://localhost:{port}/feed%2Fone?topic=two#local", mode],
+            env=env, text=True, capture_output=True, timeout=10,
+        )
+        worker.join(timeout=10)
+        assert not worker.is_alive(), f"move {mode}: peer did not stop"
+        assert not errors, f"move {mode}: {errors}; client: {result.stdout} {result.stderr}"
+        assert result.returncode == 0, result.stdout + result.stderr
+        print(f"move {mode}: passed")
+
+
 def run_headers_case(client, context, certificate):
     errors = []
     attempts = (
@@ -290,6 +326,7 @@ def main():
     parser.add_argument("--client", required=True)
     parser.add_argument("--headers-client", required=True)
     parser.add_argument("--disconnecting-client", required=True)
+    parser.add_argument("--move-client", required=True)
     parser.add_argument("--feeder-client")
     parser.add_argument("--perp-feeder-client")
     parser.add_argument("--openssl", required=True)
@@ -309,6 +346,8 @@ def main():
             run_case(args.client, context, certificate, case)
         run_headers_case(args.headers_client, context, certificate)
         run_disconnecting_case(args.disconnecting_client, context, certificate)
+        for mode in ("construct", "assign", "connected", "connected_assign"):
+            run_move_case(args.move_client, context, certificate, mode)
         for client, target in ((args.feeder_client, "/ws"), (args.perp_feeder_client, "/public/ws")):
             if not client:
                 continue

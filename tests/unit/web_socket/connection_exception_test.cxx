@@ -136,7 +136,7 @@ TEST_CASE("Closing suppresses resolver cancellation allocation failure and queue
     REQUIRE(nom::ws_status::connecting == client.status());
 
     {
-        // Resolver cancellation allocates a fresh cancellation token after close() detaches the session.
+        // Resolver cancellation allocates a fresh cancellation token after close() selects a terminal state.
         connection_allocation_failure failure(client, nom::ws_status::conn_failed);
         client.close();
     }
@@ -149,4 +149,33 @@ TEST_CASE("Closing suppresses resolver cancellation allocation failure and queue
     CHECK(calls == 0);
     client.close();
     CHECK(nom::ws_status::conn_failed == client.status());
+}
+
+TEST_CASE("Move construction allocation failure preserves the source attempt")
+{
+    nom::init_logger(nom::main_logger);
+    boost::asio::io_context io;
+    nom::web_socket source(io.get_executor(), nom::url("wss://127.0.0.1:1/"));
+    unsigned calls = 0;
+    source.connect(nom::web_socket::delegate{[&](nom::web_socket&, const auto&) { ++calls; }});
+    const auto original_id = source.session_id();
+    bool caught_original = false;
+    {
+        connection_allocation_failure failure(source);
+        try
+        {
+            nom::web_socket destination(std::move(source));
+        }
+        catch (const injected_allocation_failure&)
+        {
+            caught_original = true;
+        }
+    }
+    REQUIRE(caught_original);
+    CHECK(failure_injected);
+    CHECK(source.status() == nom::ws_status::connecting);
+    CHECK(source.session_id() == original_id);
+    source.close();
+    io.run();
+    CHECK(calls == 0);
 }

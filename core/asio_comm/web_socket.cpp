@@ -39,6 +39,8 @@ namespace nom
 
     struct web_socket::session : std::enable_shared_from_this<session>
     {
+        friend void web_socket::swap_state(web_socket& other) noexcept;
+
     private:
         inline static std::atomic<std::uint64_t> next_id{0};
 
@@ -47,15 +49,12 @@ namespace nom
             static_assert(NewStatus != ws_status::init, "Only construction may select init");
             assert(static_cast<std::uint8_t>(status_) < static_cast<std::uint8_t>(NewStatus) &&
                    "State transitions must change the state in increasing order");
-            assert(parent_ && "State transitions require an attached session");
             status_ = NewStatus;
-            if constexpr (NewStatus == ws_status::conn_failed || NewStatus == ws_status::disconnected)
-                parent_ = nullptr;
         }
 
     public:
-        session(web_socket* owner)
-            : parent_(owner),
+        session(web_socket* parent)
+            : parent_(parent),
               id_{[this]()
                   {
                       assert(parent_);
@@ -73,7 +72,17 @@ namespace nom
             return id_;
         }
 
-        // A session may outlive its owner while canceled operations complete.
+        void update_delegate(const delegate& callbacks)
+        {
+            delegate_ = callbacks;
+        }
+
+        const delegate& callbacks() const noexcept
+        {
+            return delegate_;
+        }
+
+        // A session may outlive its parent while canceled operations complete.
         void close() noexcept
         {
             switch (status_)
@@ -147,7 +156,7 @@ namespace nom
         // TODO IDs and stage definitions: ws_current_work.md.
         // TODO[WS-CONNECT-DEADLINE] (stage WS-06): Make the connection procedure time-bound
         // (we can use default_async_operation_timeout_sec for it).
-        // TODO[WS-SETUP-STORAGE] (stage WS-09): Dispose of state required only for connection setup
+        // TODO[WS-SETUP-STORAGE] (stage WS-02): Dispose of state required only for connection setup
         // after the connection is established (e.g. resolver).
         // TODO[WS-TRANSPORT-OPTIONS] (stage WS-09): Test various connection options
         // (different TLS levels, no SSL?).
@@ -186,12 +195,12 @@ namespace nom
             {
             case ws_status::connecting:
             {
-                const auto notify_error = [owner = parent_](std::string_view description, std::string_view message)
+                const auto notify_error = [this](std::string_view description, std::string_view message)
                 {
-                    owner->delegate_(*owner,
-                                     event::network_error{.ts = std::chrono::steady_clock::now(),
-                                                          .description = std::string(description),
-                                                          .message = std::string(message)});
+                    delegate_(*parent_,
+                              event::network_error{.ts = std::chrono::steady_clock::now(),
+                                                   .description = std::string(description),
+                                                   .message = std::string(message)});
                 };
                 // connect() entered connecting and started DNS resolution.
                 if (ec)
@@ -238,12 +247,12 @@ namespace nom
             {
             case ws_status::connecting:
             {
-                const auto notify_error = [owner = parent_](std::string_view description, std::string_view message)
+                const auto notify_error = [this](std::string_view description, std::string_view message)
                 {
-                    owner->delegate_(*owner,
-                                     event::network_error{.ts = std::chrono::steady_clock::now(),
-                                                          .description = std::string(description),
-                                                          .message = std::string(message)});
+                    delegate_(*parent_,
+                              event::network_error{.ts = std::chrono::steady_clock::now(),
+                                                   .description = std::string(description),
+                                                   .message = std::string(message)});
                 };
                 // on_resolve() started TCP connect while the connection attempt remained active.
                 if (ec)
@@ -304,12 +313,12 @@ namespace nom
             {
             case ws_status::connecting:
             {
-                const auto notify_error = [owner = parent_](std::string_view description, std::string_view message)
+                const auto notify_error = [this](std::string_view description, std::string_view message)
                 {
-                    owner->delegate_(*owner,
-                                     event::network_error{.ts = std::chrono::steady_clock::now(),
-                                                          .description = std::string(description),
-                                                          .message = std::string(message)});
+                    delegate_(*parent_,
+                              event::network_error{.ts = std::chrono::steady_clock::now(),
+                                                   .description = std::string(description),
+                                                   .message = std::string(message)});
                 };
                 // on_connect() completed TCP/SNI setup and started the TLS handshake.
                 if (ec)
@@ -390,12 +399,12 @@ namespace nom
             {
             case ws_status::connecting:
             {
-                const auto notify_error = [owner = parent_](std::string_view description, std::string_view message)
+                const auto notify_error = [this](std::string_view description, std::string_view message)
                 {
-                    owner->delegate_(*owner,
-                                     event::network_error{.ts = std::chrono::steady_clock::now(),
-                                                          .description = std::string(description),
-                                                          .message = std::string(message)});
+                    delegate_(*parent_,
+                              event::network_error{.ts = std::chrono::steady_clock::now(),
+                                                   .description = std::string(description),
+                                                   .message = std::string(message)});
                 };
                 // on_ssl_handshake() completed TLS setup and started the WebSocket handshake.
                 try
@@ -424,7 +433,7 @@ namespace nom
                 last_recv_ts_ = std::chrono::steady_clock::now();
                 LDEBUG("{} connected", id());
                 set_status<ws_status::connected>();
-                parent_->delegate_(*parent_, event::on_connected{.ts = last_recv_ts_});
+                delegate_(*parent_, event::on_connected{.ts = last_recv_ts_});
                 // The delegate may call close() or trigger a write-failure shutdown before receive/timer work starts.
                 if (ws_status::connected != status_)
                     break;
@@ -480,10 +489,9 @@ namespace nom
                 {
                     LDEBUG("{} Close request received from server", id());
                     idle_timer_.cancel();
-                    web_socket* const owner = parent_;
                     set_status<ws_status::disconnected>();
-                    owner->delegate_(
-                        *owner,
+                    delegate_(
+                        *parent_,
                         event::on_disconnected{.ts = std::chrono::steady_clock::now(), .reason = "Closed by server"});
                     break;
                 }
@@ -641,21 +649,19 @@ namespace nom
                 if (ec)
                 {
                     idle_timer_.cancel();
-                    web_socket* const owner = parent_;
                     set_status<ws_status::disconnected>();
-                    owner->delegate_(
-                        *owner, event::on_disconnected{.ts = std::chrono::steady_clock::now(), .reason = ec.message()});
+                    delegate_(*parent_,
+                              event::on_disconnected{.ts = std::chrono::steady_clock::now(), .reason = ec.message()});
                     break;
                 }
 
                 const auto mutable_buffer = buffer_.data(); // Non-owning view; no payload copy.
                 last_recv_ts_ = std::chrono::steady_clock::now();
 
-                parent_->delegate_(
-                    *parent_,
-                    event::ws_data{.ts = last_recv_ts_,
-                                   .data = std::span<const char>(static_cast<char*>(mutable_buffer.data()),
-                                                                 mutable_buffer.size())});
+                delegate_(*parent_,
+                          event::ws_data{.ts = last_recv_ts_,
+                                         .data = std::span<const char>(static_cast<char*>(mutable_buffer.data()),
+                                                                       mutable_buffer.size())});
                 buffer_.consume(buffer_.size());
 
                 // The delegate may close or replace this session; do not rearm after disconnection.
@@ -740,10 +746,9 @@ namespace nom
                     LWARN("{} Shutdown error: {}", id(), error_message);
                 }
 
-                web_socket* const owner = parent_;
                 set_status<ws_status::disconnected>();
-                owner->delegate_(
-                    *owner, event::on_disconnected{.ts = std::chrono::steady_clock::now(), .reason = error_message});
+                delegate_(*parent_,
+                          event::on_disconnected{.ts = std::chrono::steady_clock::now(), .reason = error_message});
                 break;
             }
             case ws_status::disconnected:
@@ -758,7 +763,8 @@ namespace nom
         }
 
         ws_status status_{ws_status::init};
-        web_socket* parent_; // Null in either terminal state; the wrapper may still retain this session.
+        web_socket* parent_;
+        delegate delegate_;
         std::string id_;
         tcp::resolver resolver_;
         websocket::stream<beast::ssl_stream<beast::tcp_stream>> stream_;
@@ -771,12 +777,12 @@ namespace nom
 
     // DONE TODO[WS-EAGER-SESSION] (stage WS-02): Always create a session so web_socket::send
     // (and others) need not check for a valid session_ pointer.
-    // TODO[WS-MOVE-COPY] (stage WS-02): Consider enabling move/copy construction and assignment
+    // DONE TODO[WS-MOVE-COPY] (stage WS-02): Consider enabling move/copy construction and assignment
     // for web_socket (why are they disabled?).
-    // TODO[WS-TLS-OWNERSHIP] (stage WS-02): Review why the TLS context is at the web_socket level
+    // DONE TODO[WS-TLS-OWNERSHIP] (stage WS-02): Review why the TLS context is at the web_socket level
     // (could it move to session?).
     web_socket::web_socket(net::any_io_executor executor, const ::nom::url& address)
-        : io_(std::make_unique<io_state>(std::move(executor))), url_(address)
+        : url_(address), io_(std::make_unique<io_state>(std::move(executor)))
     {
         if ("wss" != url_.scheme())
             throw std::invalid_argument("Wrong web_socket URL scheme (expected wss://): " + url_.scheme());
@@ -792,23 +798,59 @@ namespace nom
         : web_socket(std::move(executor), ::nom::url("wss", host, port, target))
     {
     }
+    web_socket::web_socket(web_socket&& other) : web_socket(other.io_->executor, other.url_)
+    {
+        // Prepare a replacement before touching other, so a failed allocation leaves it unchanged.
+        swap_state(other);
+    }
+
+    web_socket& web_socket::operator=(web_socket&& other) noexcept
+    {
+        if (this != &other)
+        {
+            swap_state(other);
+            other.close();
+        }
+        return *this;
+    }
+
+    void web_socket::swap_state(web_socket& other) noexcept
+    {
+        static_assert(std::is_nothrow_swappable_v<ws_params> && std::is_nothrow_swappable_v<::nom::url>);
+        std::swap(params_, other.params_);
+        std::swap(url_, other.url_);
+        std::swap(io_, other.io_);
+        std::swap(session_, other.session_);
+        std::swap(session_->parent_, other.session_->parent_);
+    }
 
     web_socket::~web_socket()
     {
         close();
     }
 
+    void web_socket::update_delegate(const delegate& callbacks)
+    {
+        session_->update_delegate(callbacks);
+    }
+
+    const web_socket::delegate& web_socket::callbacks() const noexcept
+    {
+        return session_->callbacks();
+    }
+
     void web_socket::connect(const delegate& callbacks)
     {
         if (ws_status::init == session_->status())
         {
-            delegate_ = callbacks;
+            session_->update_delegate(callbacks);
         }
         else
         {
             close();
-            delegate_ = callbacks;
-            session_ = std::make_shared<session>(this);
+            auto next_session = std::make_shared<session>(this);
+            next_session->update_delegate(callbacks);
+            session_ = std::move(next_session);
         }
         session_->connect();
     }
