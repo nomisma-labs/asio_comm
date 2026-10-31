@@ -52,7 +52,7 @@ int main(int argc, char** argv)
                 else if constexpr (std::same_as<event_type, nom::event::network_error>)
                 {
                     ++network_errors;
-                    setup_failure = nom::ws_status::failed == client.status() &&
+                    setup_failure = nom::ws_status::conn_failed == client.status() &&
                                     event.description == "WebSocket handshake setup error" && !event.message.empty();
                     std::cerr << event.description << ": " << event.message << '\n';
                     finish();

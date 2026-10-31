@@ -84,11 +84,11 @@ TEST_CASE("Connection initiation exceptions leave a failed session and preserve 
         }
     }
     REQUIRE(caught_original);
-    CHECK(nom::ws_status::failed == client.status());
+    CHECK(nom::ws_status::conn_failed == client.status());
     CHECK(calls == 0);
     io.poll();
     CHECK(calls == 0);
-    CHECK(nom::ws_status::failed == client.status());
+    CHECK(nom::ws_status::conn_failed == client.status());
 
     // A new attempt replaces the failed session and can still be canceled normally.
     io.restart();

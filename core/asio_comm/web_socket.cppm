@@ -94,12 +94,12 @@ export namespace nom
         };
     } // namespace detail
 
-    // TODO[WS-INIT] (stage WS-02): Introduce init (a session should start in init, not in disconnected).
-    // TODO[WS-FAILURE-NAME] (stage WS-02): Rename failed to conn_failed.
+    // DONE TODO[WS-INIT] (stage WS-02): Introduce init (a session should start in init, not in disconnected).
+    // DONE TODO[WS-FAILURE-NAME] (stage WS-02): Rename failed to conn_failed.
     // TODO[WS-TERMINAL-FAILURE] (stage WS-02): Make conn_failed terminal, on the same level as disconnected.
     // TODO[WS-DETACH] (stage WS-02): Any terminal state (disconnected, conn_failed) should also be
     // detached from the parent.
-    NOM_ENUM(ws_status, std::uint8_t, disconnected, connecting, connected, disconnecting, failed)
+    NOM_ENUM(ws_status, std::uint8_t, init, connecting, connected, disconnecting, conn_failed, disconnected)
 
     // TODO[WS-CABLE-LOSS] (stage WS-06): Reproduce hard disconnection (unplug the network cable).
     // TODO[WS-INTERFACE-LOSS] (stage WS-06): Reproduce Docker-based interface disconnection

@@ -119,9 +119,8 @@ namespace nom
         {
             switch (status_)
             {
-            case ws_status::disconnected:
+            case ws_status::init:
             {
-                // The public connect() constructs a fresh session before calling this function.
                 status_ = ws_status::connecting;
 
                 try
@@ -132,7 +131,7 @@ namespace nom
                 }
                 catch (...)
                 {
-                    status_ = ws_status::failed;
+                    status_ = ws_status::conn_failed;
                     throw;
                 }
                 break;
@@ -154,7 +153,7 @@ namespace nom
                 // connect() entered connecting and started DNS resolution.
                 if (ec)
                 {
-                    status_ = ws_status::failed;
+                    status_ = ws_status::conn_failed;
                     LERROR("{} Resolve error: {}", id(), ec.message());
                     parent_->delegate_(*parent_,
                                        event::network_error{.ts = std::chrono::steady_clock::now(),
@@ -173,15 +172,15 @@ namespace nom
                 }
                 catch (const std::exception& error)
                 {
-                    status_ = ws_status::failed;
+                    status_ = ws_status::conn_failed;
                     setup_error = error.what();
                 }
                 catch (...)
                 {
-                    status_ = ws_status::failed;
+                    status_ = ws_status::conn_failed;
                     setup_error = "Unknown exception";
                 }
-                if (ws_status::failed == status_)
+                if (ws_status::conn_failed == status_)
                 {
                     parent_->delegate_(*parent_,
                                        event::network_error{.ts = std::chrono::steady_clock::now(),
@@ -191,6 +190,8 @@ namespace nom
                 break;
             }
             case ws_status::disconnected:
+                // TODO: review this - We are not supposed to enter disconnected state before connected (also update the
+                // following assert message)
                 // close() (including reconnect/destruction) abandoned this resolution before completion.
                 break;
             default:
@@ -209,7 +210,7 @@ namespace nom
                 // on_resolve() started TCP connect while the connection attempt remained active.
                 if (ec)
                 {
-                    status_ = ws_status::failed;
+                    status_ = ws_status::conn_failed;
                     LERROR("{} Connect error: {}", id(), ec.message());
                     parent_->delegate_(*parent_,
                                        event::network_error{.ts = std::chrono::steady_clock::now(),
@@ -220,7 +221,7 @@ namespace nom
 
                 if (!SSL_set_tlsext_host_name(stream_.next_layer().native_handle(), parent_->url_.host().c_str()))
                 {
-                    status_ = ws_status::failed;
+                    status_ = ws_status::conn_failed;
                     ec = beast::error_code(static_cast<int>(::ERR_get_error()), net::error::get_ssl_category());
                     LERROR("{} Connect error: {}", id(), ec.message());
                     parent_->delegate_(*parent_,
@@ -246,15 +247,15 @@ namespace nom
                 }
                 catch (const std::exception& error)
                 {
-                    status_ = ws_status::failed;
+                    status_ = ws_status::conn_failed;
                     setup_error = error.what();
                 }
                 catch (...)
                 {
-                    status_ = ws_status::failed;
+                    status_ = ws_status::conn_failed;
                     setup_error = "Unknown exception";
                 }
-                if (ws_status::failed == status_)
+                if (ws_status::conn_failed == status_)
                 {
                     parent_->delegate_(*parent_,
                                        event::network_error{.ts = std::chrono::steady_clock::now(),
@@ -264,7 +265,9 @@ namespace nom
                 break;
             }
             case ws_status::disconnected:
-                // close() (including reconnect/destruction) abandoned TCP connect before completion.
+                // TODO: review this - We are not supposed to enter disconnected state before connected (also update the
+                // following assert message)
+                //  close() (including reconnect/destruction) abandoned TCP connect before completion.
                 break;
             default:
                 assert(false && "TCP connect completions require connecting or disconnected state");
@@ -282,7 +285,7 @@ namespace nom
                 // on_connect() completed TCP/SNI setup and started the TLS handshake.
                 if (ec)
                 {
-                    status_ = ws_status::failed;
+                    status_ = ws_status::conn_failed;
                     LERROR("{} Connect/SSL handshake error: {}", id(), ec.message());
                     parent_->delegate_(*parent_,
                                        event::network_error{.ts = std::chrono::steady_clock::now(),
@@ -311,15 +314,15 @@ namespace nom
                 }
                 catch (const std::exception& error)
                 {
-                    status_ = ws_status::failed;
+                    status_ = ws_status::conn_failed;
                     setup_error = error.what();
                 }
                 catch (...)
                 {
-                    status_ = ws_status::failed;
+                    status_ = ws_status::conn_failed;
                     setup_error = "Unknown exception";
                 }
-                if (ws_status::failed == status_)
+                if (ws_status::conn_failed == status_)
                 {
                     parent_->delegate_(*parent_,
                                        event::network_error{.ts = std::chrono::steady_clock::now(),
@@ -329,7 +332,10 @@ namespace nom
                 break;
             }
             case ws_status::disconnected:
-                // close() (including reconnect/destruction) abandoned the TLS handshake before completion.
+                // TODO: review this - We are not supposed to enter disconnected state before connected (also update the
+                // following assert message)
+                // close() (including reconnect/destruction) abandoned the TLS handshake
+                // before completion.
                 break;
             default:
                 assert(false && "TLS handshake completions require connecting or disconnected state");
@@ -376,15 +382,15 @@ namespace nom
                 }
                 catch (const std::exception& error)
                 {
-                    status_ = ws_status::failed;
+                    status_ = ws_status::conn_failed;
                     setup_error = error.what();
                 }
                 catch (...)
                 {
-                    status_ = ws_status::failed;
+                    status_ = ws_status::conn_failed;
                     setup_error = "Unknown exception";
                 }
-                if (ws_status::failed == status_)
+                if (ws_status::conn_failed == status_)
                 {
                     parent_->delegate_(*parent_,
                                        event::network_error{.ts = std::chrono::steady_clock::now(),
@@ -394,7 +400,7 @@ namespace nom
                 }
                 if (ec)
                 {
-                    status_ = ws_status::failed;
+                    status_ = ws_status::conn_failed;
                     LERROR("{} Connect/Handshake error: {}", id(), ec.message());
                     parent_->delegate_(*parent_,
                                        event::network_error{.ts = std::chrono::steady_clock::now(),
@@ -424,6 +430,8 @@ namespace nom
                 break;
             }
             case ws_status::disconnected:
+                // TODO: review this - We are not supposed to enter disconnected state before connected (also update the
+                // following assert message)
                 // close() (including reconnect/destruction) abandoned the WebSocket handshake before completion.
                 break;
             default:
@@ -736,7 +744,7 @@ namespace nom
             }
         }
 
-        ws_status status_{ws_status::disconnected};
+        ws_status status_{ws_status::init};
         web_socket* parent_; // Null once web_socket::close() has disowned this session.
         std::string id_;
         tcp::resolver resolver_;
