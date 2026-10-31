@@ -25,6 +25,7 @@ export import nom.assembly;
 // in a GCC 16 consumer currently causes duplicate CPO and thread-local service symbols.
 export namespace nom::asio
 {
+    // TODO: consider hiding boost types completely behind nomisma wrappers
     using boost::asio::any_io_executor;
     using boost::asio::io_context;
     using boost::asio::steady_timer;
@@ -174,7 +175,6 @@ export namespace nom
             return delegate_;
         }
 
-        // Settings are read when used; edits must be serialized with calls and completions.
         ws_params& params() noexcept
         {
             return params_;
