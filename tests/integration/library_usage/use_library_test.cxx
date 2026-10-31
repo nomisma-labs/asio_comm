@@ -29,7 +29,7 @@ int main()
     client.close();
     io.run();
     return client.url().scheme() == "wss" && client.url().host() == "localhost" && client.url().port() == 9443 &&
-                   client.url().target() == "/feed?one=two" && nom::enum_to_string(client.status()) == "disconnected"
+                   client.url().target() == "/feed?one=two" && nom::enum_to_string(client.status()) == "conn_failed"
                ? 0
                : 1;
 }

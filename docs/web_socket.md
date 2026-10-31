@@ -2,18 +2,24 @@
 
 This records the public [module interface](../core/asio_comm/web_socket.cppm) and
 the [session implementation](../core/asio_comm/web_socket.cpp). The diagram describes
-one `web_socket::session`; every public `connect()` creates a new session and closes any old
-one. Usage examples are in the [WebSocket example README](../apps/web_socket_example/README.md).
+one `web_socket::session`. The wrapper constructs its first session eagerly; the first
+`connect()` starts that session, and later attempts close and replace the previous session. Usage examples are in the [WebSocket example README](../apps/web_socket_example/README.md).
 Usage constraints, deferred work and validation coverage follow the event descriptions.
 The diagram assumes the existing contract of serialized calls and nonthrowing delegates.
+`web_socket` holds the session and forwards commands and queries. Its `connect()` only checks
+whether the session is still in its initial `init` state; otherwise it closes and replaces it.
+It does not dispatch session states or depend on specific post-close states. The state machine
+and its transition rules belong to `session`.
 
 ## State diagram
 
 Top-level state captions show `status_`. The `connecting` group expands its sequential operation
-stages; these are not additional `ws_status` values. The diagram starts with a fresh connection
-attempt. The constructor's brief `disconnected` status is folded into the initial arrow;
-`session.connect()` enters `connecting` before starting resolution. Sessions are never reused.
+stages; these are not additional `ws_status` values. A fresh session starts in `init`;
+`session.connect()` enters `connecting` before starting resolution. Terminal sessions are never reused.
 Ownership and destruction are described below; callback guards use `status_` only.
+Each stateful session operation or handler uses one `switch`/`case` for entry-state dispatch.
+Mid-function state checks, including setup outcomes and guards after delegate calls, use
+concise `if (status_ ...)` conditions. A switch on control-frame kind handles a separate input.
 Edge labels use **event [condition] / action**; entering a top-level state implies its stored status.
 Multiple events on one transition are separated by commas; `/` separates an event from its actions.
 Transitions from the `connecting` group apply to every stage within it.
@@ -23,7 +29,10 @@ All `close()` edges share the cleanup actions described below the diagram.
 stateDiagram-v2
     direction TB
 
-    [*] --> Connecting: **[connect]** / async_resolve
+    [*] --> Init
+    state "init" as Init
+    Init --> Init: close() / no-op
+    Init --> Connecting: **[connect]** / async_resolve
 
     state "disconnected" as Disconnected
     state "connecting" as Connecting {
@@ -40,11 +49,11 @@ stateDiagram-v2
     }
     state "connected" as Connected
     state "disconnecting" as Disconnecting
-    state "failed" as Failed
+    state "conn_failed" as ConnFailed
 
     WsHandshaking --> Connected: WsHandshakeDone<br/>/ on_connected, start I/O if still connected
-    Connecting --> Failed: ConnectError, ConnectSetupException / emit network_error
-    Resolving --> Failed: ConnectStartException / rethrow
+    Connecting --> ConnFailed: ConnectError, ConnectSetupException / emit network_error
+    Resolving --> ConnFailed: ConnectStartException / rethrow
 
     Connected --> Connected: ReadDone [ok]<br/>/ ws_data, next read unless disconnected
     Connected --> Disconnecting: shutdown [idle timer or write failure]<br/>/ cancel timers, async_close
@@ -54,10 +63,10 @@ stateDiagram-v2
     Disconnecting --> Disconnected: ControlFrame [close], ReadDone [error],<br/>CloseDone [any] / on_disconnected
     Disconnected --> Disconnected: Pending completion<br/>/ no delegate calls or new I/O
 
-    Connecting --> Disconnected: close()
+    Connecting --> ConnFailed: close()
     Connected --> Disconnected: close()
     Disconnecting --> Disconnected: close()
-    Failed --> Disconnected: close()
+    ConnFailed --> ConnFailed: close(), pending completion<br/>/ no delegate calls or new I/O
 
     classDef pendingStyle fill:#ADD8E6
     classDef terminalStyle fill:#A9A9A9
@@ -65,7 +74,7 @@ stateDiagram-v2
     classDef disconnectingStyle fill:#FFD580
 
     class Resolving,TcpConnecting,SslHandshaking,WsHandshaking pendingStyle
-    class Disconnected,Failed terminalStyle
+    class Disconnected,ConnFailed terminalStyle
     class Connected liveStyle
     class Disconnecting disconnectingStyle
 ```
@@ -73,24 +82,28 @@ stateDiagram-v2
 - `disconnecting` reports that an internal graceful close has started. `is_connected()` is
   false and `send()` returns false. Successful timer callbacks stop,
   and callers prevent further `shutdown()` requests. Pending reads can still deliver data.
-- The initial arrow represents a fresh session's connection attempt. Public reconnect
-  closes the old session and starts a new diagram. Before the first connect and
-  after `close()`, the wrapper has no session and reports `disconnected`.
-- `close()`, called by **[close]**, replacement **[connect]**, or **[destroy]**, detaches
-  the session (`parent_ = nullptr`) and sets `disconnected` before independently attempting
-  TCP close and resolver/timer cancellation. Cleanup exceptions are suppressed; no event is
-  delivered. These actions also apply when the session is already disconnected.
+- The wrapper always holds a session and reports that session's status and identity. Before
+  its first attempt it reports `init`. Closing an unused client is a no-op and retains its
+  identity; the first `connect()` starts that session. Reconnect closes the old session and
+  constructs a fresh `init` session with a new identity before starting it.
+- `close()`, called by **[close]**, replacement **[connect]**, or **[destroy]**, is a no-op in
+  `init`. Otherwise it detaches the session (`parent_ = nullptr`), maps `connecting` to
+  `conn_failed` and `connected`/`disconnecting` to `disconnected`, and preserves an existing
+  terminal status. It then independently disables Beast handshake/close timeouts and attempts TCP close and
+  resolver/timer cancellation.
+  Cleanup exceptions are suppressed; no event is delivered. The wrapper retains its session
+  and identity after close, until reconnect or destruction.
 - `disconnected` covers both an attached session whose connection ended and a detached session
   after `close()`. Reaching it does not destroy the object: pending handlers may retain shared
   ownership. Destruction occurs when the last shared owner releases the session.
 - `shutdown()` is an internal helper that requires connected status. Any other status is
   a precondition violation: assert, or log and return when assertions are disabled. Pending attempts are
-  cancelled through `close()`, which detaches the session. Sessions that enter `failed` or
+  cancelled through `close()`, which detaches the session. Sessions that enter `conn_failed` or
   `disconnected` through operation completions remain attached until `close()`, reconnect or
   owner destruction; those transitions do not automatically detach them.
 - The first close-frame, read-error or close-completion handler that sees `connected` or
   `disconnecting` sets `disconnected` and emits `on_disconnected`. Later handlers do not emit another terminal event.
-  A `CloseDone` error does not select `Failed` on this path.
+  A `CloseDone` error does not select `ConnFailed` on this path.
 - Self-loops mean no change to `status_`. Other unchanged-state cases are listed below.
   Read, control-frame, ping and close completions stop when disconnected.
   Delegate calls are synchronous; `close()` or reconnect in a
@@ -107,25 +120,34 @@ with success if already queued.
 
 ### Client commands and lifetime
 
-- **`[connect]`** — `web_socket::connect(callbacks)`: replace the previous session and
-  delegate; begin a fresh connection attempt reading the owner's `ws_params` through `parent_`.
-  Parameters, including headers, persist across reconnects and are not copied into the session.
-  The new session's `connect()` dispatches through `switch (status_)`: disconnected enters connecting and starts
-  DNS resolution; other states log an error and do nothing. Existing sessions are never reused.
-  If DNS initiation throws, the new session becomes failed and the original exception propagates
-  to the caller; no delegate event is emitted. Exceptions before a new session is installed
-  are also propagated, without creating a failed session.
-- **`[close]`** — `web_socket::close() noexcept`: detach and set disconnected first, then
-  independently attempt TCP close, resolver cancellation and cancellation of each timer.
-  Cleanup exceptions are suppressed without logging or delegate calls; a failed cancellation
-  may leave an operation pending until it completes naturally. Its completion cannot notify
-  the delegate. There is no final event or buffered-data flush. No session means no-op.
-- **`[destroy]`** — owner destruction calls `close()`; the last shared owner release later
-  destroys a session still retained by pending handlers.
+- **`[connect]`** — `web_socket::connect(callbacks)`: use the eagerly created session directly
+  while it is still in `init`; otherwise close and replace it with a fresh session. Set the
+  delegate and forward `connect()` to the selected session. The wrapper does not inspect the
+  old session's state after close. Read the owner's `ws_params` through `parent_`; parameters, including
+  headers, persist across reconnects and are not copied into the session.
+  The session's `connect()` dispatches through `switch (status_)`: `init` enters `connecting`
+  and starts DNS resolution; other states log an error and do nothing. Terminal sessions are
+  never reused. If DNS initiation throws, the session becomes `conn_failed` and the original
+  exception propagates to the caller; no delegate event is emitted. If replacing the delegate
+  or allocating the next session throws, the existing session remains installed with its
+  current status. Construction of the wrapper itself now includes allocation and construction
+  of the first session and its resolver, TLS/WebSocket stream, and timers.
+- **`[close]`** — `web_socket::close() noexcept`: no-op in `init`; otherwise detach and select
+  or preserve the appropriate terminal state, then independently disable Beast handshake/close
+  timeouts and attempt TCP close, resolver cancellation and cancellation of each application timer. Cleanup exceptions are suppressed without
+  logging or delegate calls; a failed cancellation may leave an operation pending until it
+  completes naturally. Its completion cannot notify the delegate. There is no final event or
+  buffered-data flush. Repeated close preserves both the terminal status and session identity.
+- **`[destroy]`** — owner destruction calls `close()` and releases its shared ownership.
+  Pending handlers keep the detached session alive until their completion or destruction.
+  `shared_ptr` is required by this lifetime scheme: substituting `unique_ptr` and raw captures
+  would destroy the session while queued handlers still reference its transport or buffers.
+  Unique ownership would require a separate operation-state lifetime or an explicit drain
+  contract before reconnect/destruction; neither is provided by this API.
 - **`[send]`** — blocking write returning a `[[nodiscard]]` bool. A complete write returns true;
-  short writes and error-code failures request `shutdown()` and return false. Without a session,
-  the public wrapper returns false. Otherwise, the session handler uses `switch (status_)`:
-  the connected case writes; every other state logs a warning and returns false without writing.
+  short writes and error-code failures request `shutdown()` and return false. The wrapper
+  delegates directly to its always-present session: connected writes; every other state logs
+  a warning and returns false without writing.
 - **`[update_delegate]`** — replace the event recipient; no lifecycle transition.
 - **Parameter edits** — `params()` exposes the owner's `ws_params`. Edits must be serialized
   with calls and completions; each operation reads the current values when it needs them.
@@ -137,20 +159,20 @@ with success if already queued.
 ### Connection completions
 
 These handlers dispatch through `switch (status_)`: connecting handles the current stage,
-disconnected ignores its completion, and all other states assert, or log and return when
+`conn_failed` ignores its completion, and all other states assert, or log and return when
 assertions are disabled. `connect()` sets connecting before starting DNS resolution; each
 successful stage starts the next operation without changing that status. Connection stages
-run sequentially, with only one stage pending at a time. A connection error sets `failed`
-and ends the chain, so no later connection completion can enter failed.
-`close()`, reconnect, or owner destruction sets the session to `disconnected` before cancelling
-operations, so queued completions stop without checking `parent_`.
+run sequentially, with only one stage pending at a time. A connection error sets `conn_failed`
+and ends the chain. Cancellation through `close()`, reconnect, or owner destruction also sets
+`conn_failed` before cancelling setup operations, so queued completions stop without checking
+`parent_`. This includes successful completions already queued when cancellation occurs.
 The synchronous socket setup and handshake request decorator assert connecting.
-Setup and operation-initiation exceptions inside these completion handlers set failed and
+Setup and operation-initiation exceptions inside these completion handlers set `conn_failed` and
 emit `network_error` after leaving the catch. The event identifies the failed stage and carries
 `std::exception::what()`, or `Unknown exception` for other exception types. The original setup
 exception is suppressed. Delegate calls remain outside the guarded operations, so callback
-exceptions are not translated into another network error. The failed session stays owned
-until `close()` or a new `connect()`.
+exceptions are not translated into another network error. The failed session stays attached
+until `close()` and remains owned by the wrapper until reconnect or destruction.
 
 - **`ResolveDone`** — `on_resolve`: successful DNS resolution starts TCP connect.
 - **`TcpConnectDone`** — `on_connect`: successful TCP connection and SNI setup start the
@@ -164,10 +186,10 @@ until `close()` or a new `connect()`.
 - **`ConnectError`** — diagram shorthand for an error in any of those four completions, or SNI
   setup failure inside `on_connect`. Emit `network_error`; no automatic `close()`.
 - **`ConnectStartException`** — DNS initiation throws during the caller's `connect()` invocation.
-  Set failed and rethrow to that caller; no delegate event or automatic `close()`.
+  Set `conn_failed` and rethrow to that caller; no delegate event or automatic `close()`.
 - **`ConnectSetupException`** — setup or operation initiation throws inside `on_resolve`,
   `on_connect`, `on_ssl_handshake`, or the connecting-phase setup in `on_handshake`.
-  Set failed, notify through `network_error`, and finish the handler without rethrowing the
+  Set `conn_failed`, notify through `network_error`, and finish the handler without rethrowing the
   reported exception. No automatic `close()`. Operations started after entering connected
   use the existing behavior and need a separate exception-cleanup policy.
 
@@ -203,11 +225,11 @@ Valid `ReadDone` entry states and their origins:
   or `on_shutdown()` changed the state before the pending read completion was delivered.
   Ignoring it avoids callbacks to a detached owner or a duplicate terminal event.
 
-`ReadDone` cannot occur while connecting or failed: reads start only after a successful
+`ReadDone` cannot occur while init, connecting or conn_failed: reads start only after a successful
 handshake, and a session is never reused. A previous read error does not produce another read
 completion: only one read is outstanding, and its error path does not rearm. The switch's
 default branch expresses the entry-state invariant.
-`CloseDone` cannot arrive while connected, connecting or failed: `shutdown()` sets
+`CloseDone` cannot arrive while init, connected, connecting or conn_failed: `shutdown()` sets
 disconnecting before starting the operation. The switch's default branch rejects these
 states and unknown status values.
 
@@ -253,7 +275,7 @@ connect; it also covers the subsequent TLS handshake. Socket buffer sizes are re
 parameters after TCP connects. WebSocket handshake/close timeouts use Beast's client defaults.
 
 Transport/protocol timeouts arrive through the relevant completion's error code; they are
-not a separate callback or an unconditional transition to `failed`.
+not a separate callback or an unconditional transition to `conn_failed`.
 
 ### Emitted delegate events
 
@@ -275,7 +297,11 @@ These are outputs of the current machine, shown as actions on edges:
   or automatic control-frame writes still needs review: serialized handlers alone do not
   prevent asynchronous operations from overlapping.
 - **Liveness.** The idle timer runs even with outbound pings disabled and can close a healthy
-  but quiet connection. DNS has no library deadline; an overall connection deadline remains WIP.
+  but quiet connection. Idle detection remains owned by this client; Beast's idle timeout and
+  automatic idle pings stay disabled. The activity definition, deadline scheduling, and timer
+  cancellation/error behavior are scheduled for review in
+  [WS-06](../core/asio_comm/ws_current_work.md#ws-06). DNS has no library deadline; an overall
+  connection deadline remains WIP.
 - **Exceptions after connection — deferred.** Read/ping/timer initiation, control-callback
   installation and graceful-close initiation can throw with other operations pending and the
   session still connected or disconnecting. These paths have no automatic notification/cleanup
@@ -287,8 +313,9 @@ These are outputs of the current machine, shown as actions on edges:
 
 The existing tests cover:
 
-- URL/enum integration, lifecycle and replacement, repeated close/destruction with queued
-  completions, and injected allocation failures during connection initiation and resolver cancellation.
+- URL/enum integration, eager initial session, retained identity/status after close, replacement,
+  and close/destruction with queued completions either drained or discarded by context destruction.
+- Injected allocation failures during connection initiation and resolver cancellation.
 - Local TLS send/echo, fragmented messages with interleaved ping/pong, server-pushed data,
   peer close, partial-frame EOF, close from a data callback, and certificate/hostname rejection.
 - Live headers/User-Agent settings, retained/reset parameters on reconnect, three successive

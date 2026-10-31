@@ -174,6 +174,7 @@ export namespace nom
     private:
         delegate delegate_;
         std::unique_ptr<io_state> io_;
+        // Always present; pending handlers share ownership so cancellation need not wait for completion.
         std::shared_ptr<session> session_;
         ::nom::url url_;
         ws_params params_;

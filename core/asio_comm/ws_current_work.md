@@ -9,8 +9,8 @@ test sources. It also revisits the issue review in the conversation; no separate
 file was found in the repository. Findings below come from source inspection and dependency
 documentation. No build, test run, or fault reproduction was performed for this report.
 
-Mechanical cleanup in WS-01 is complete. WS-02 now addresses session ownership, states,
-and terminal cleanup next; contract and TODO cleanup follows in WS-03. Behavior changes
+Mechanical cleanup in WS-01 is complete. WS-02 is in progress on session ownership, states,
+and terminal cleanup; contract and TODO cleanup follows in WS-03. Behavior changes
 include their own focused tests; building a general failure test framework is not a
 prerequisite for the cleanup.
 
@@ -121,12 +121,46 @@ pre-split version; only accesses to executor/TLS storage changed.
 Relevant code: [status TODO](web_socket.cppm), `session::close()`, the connection
 completion handlers, `on_control()`, `on_receive()`, and `on_shutdown()`.
 
-Confirmed behavior: `failed` already ends the connection attempt; sessions are never retried
-in place. The missing part of the TODO is consistent detachment and resource cleanup.
-Connection failures can leave the transport owned by the wrapper until explicit close or
-replacement. Peer-close/read-error paths cancel the idle timer but can leave a ping wait
-pending, keeping executor work alive until it expires. These are cleanup gaps, not evidence
-of an inevitable use-after-free: existing status guards suppress later delegate calls.
+**Progress — 2026-11-01:** `WS-EAGER-SESSION` is implemented. The wrapper constructs its first
+session eagerly, starts it on the first `connect()`, retains its status/identity on `close()`,
+and creates a fresh session for reconnect. Accessors and `send()` no longer check for a null
+session. The user's `WS-INIT` and `WS-FAILURE-NAME` changes are incorporated. An unused wrapper
+reports `init`; closing it is a no-op. Cancelling setup now reports `conn_failed`, which is
+preserved by repeated close; only a session that reached `connected` can become `disconnected`.
+Setup completion guards now ignore `conn_failed` instead of `disconnected`. Explicit close also
+disables Beast handshake/close timeouts: retaining the stream must not leave its internal
+timer keeping the executor alive after transport cancellation.
+Each stateful session operation or handler uses one entry-state `switch`/`case` mapping. Mid-function
+checks for setup failure or state changes during delegate calls use concise `if (status_ ...)`
+guards. Cleanup and status/identity retention follow the same lifecycle contract.
+The `web_socket` wrapper is a holder and forwarding interface, not another state machine. Its
+`connect()` uses an existing `init` session directly; otherwise it closes and replaces it,
+assuming only that the new session starts in `init`. It does not branch on post-close states.
+The single-switch refinement passed the `complete` build and the unit, local TLS loopback,
+and exchange-feeder suites.
+
+**Ownership decision for this change:** retain `shared_ptr<session>`. Pending operations capture
+`shared_from_this()` and can complete after close, reconnect, or wrapper destruction. A direct
+`unique_ptr` replacement would invalidate the captured session/transport/buffers. Unique
+ownership is possible with a separate shared operation state or an explicit drain/retirement
+contract, but adds a lifetime mechanism that this API does not currently need. Each session
+still constructs its backend objects eagerly; no new lazy transport layer is introduced.
+
+**Validation:** GCC 16 `complete` builds all applications and test clients; all seven tests
+pass, including installation and source/installed-package consumers. Clang 22 AddressSanitizer
+builds pass the unit, local TLS loopback, and exchange-feeder suites, with allocation-mismatch
+and leak checking enabled. Tests cover the eager identity, first-connect reuse, retained
+terminal state/identity, reconnect before draining old completions, destruction with handlers
+either drained or discarded, and injected allocation failures. The allocation-failure fixture
+now also pairs nothrow allocation with its existing malloc/free replacement. Network tests
+and LeakSanitizer ran with the required sandbox access. Bootstrap setup could not write Git
+metadata; direct CMake presets provided build/test validation. Formatting, SPDX headers, local
+links, TODO references, and diff checks pass.
+
+**Remaining lifecycle work:** connection failures can leave the transport attached until
+explicit close or replacement. Peer-close/read-error paths cancel the idle timer but can
+leave a ping wait pending. Common finalization, automatic terminal detachment, move/copy, and
+TLS-ownership decisions remain open; this change does not complete WS-02.
 
 Implement this batch as four reviewable steps:
 
@@ -152,20 +186,15 @@ contract in this stage. A documented decision can close a TODO without changing 
 | Enable copying | Keep disabled. Copying an active connection has no defined meaning. A separate configuration object can be copied if constructing similar clients is the actual requirement. |
 | Move the TLS context into the session | Ownership in the wrapper's `io_state` reuses trust configuration across attempts; session ownership gives each attempt its own context; shared immutable TLS configuration is another option if many clients need it. Keep the current placement until ownership, configuration, or measured cost favors a change. No context-lifetime defect was established here. |
 
-**Public `init` options:** keep the wrapper reporting `disconnected` when it has no session,
-or expose `init` before its first connection. The latter is clearer if callers need to
-distinguish “never started”; implement it with explicit wrapper state rather than allocating
-a resolver/TLS stream solely for the status getter. Adding `init` only to `session` does not
-change the current no-session result of `web_socket::status()`.
+**Public initial state:** implemented as `init` on the eager session. The wrapper reports that
+state until its first attempt, including after repeated `close()` before connection setup.
 
-**Detachment options:** clear `session::parent_` while retaining the terminal session in the
-wrapper, or release the wrapper's `session_` as well and store terminal status/identity
-separately. Start with the first option: it preserves diagnostics with fewer moving parts.
-Specify detachment direction explicitly. Cleanup must not accidentally turn `conn_failed`
-into `disconnected`, as the current general-purpose `session::close()` would do.
-Update completion guards for both terminal states: once a timeout or other failure cancels
-pending work, a late completion can legitimately arrive in `conn_failed`. The current
-connection-stage assertions assume only `connecting` or `disconnected` can be observed.
+**Detachment direction:** explicit close clears `session::parent_` and retains the wrapper's
+`session_`, preserving status and identity. Reconnect replaces it; old completions retain the
+old session and ignore its terminal state. Automatic detachment after network failures and
+peer close remains to be implemented as part of the common finalization policy. That policy
+must preserve `conn_failed` for attempts that never connected and `disconnected` after a
+successful connection. Connection-stage guards now accept `connecting` or `conn_failed`.
 
 **Callback options:** require reconnect/delegate replacement to be posted until after the
 callback returns, or retain stable callback storage throughout invocation so replacement is
@@ -331,17 +360,29 @@ Current behavior confirmed by inspection:
 - DNS has no library deadline. TCP connect and TLS share one configured deadline; WebSocket
   handshake/close use the suggested client timeout, 30 seconds in the installed Beast version.
 
-**Heartbeat options:**
+**Decision — 2026-11-01: retain our own idle timer.** Inactivity detection is a core client
+responsibility whose policy, transitions, and tests must remain explicit in this code.
+Keep Beast's `idle_timeout` disabled (`none()`) and its automatic idle pings disabled. This
+stage improves the existing timer rather than replacing it with Beast's idle mechanism.
 
-- **Use Beast idle timeout and keep-alive pings.** Preferred if the required contract is
-  “probe an idle peer and close if it remains unresponsive.” This can remove custom timers.
-- **Keep explicit timers.** Appropriate if exchanges require fixed ping cadence, matching
-  pong payloads, or independent heartbeat rules. Separate idle timeout from ping interval;
-  compare chrono durations directly and define the activity being tracked.
+Implement and validate the policy explicitly:
 
-Beast supports idle-timeout and automatic idle-ping settings, and WebSocket timeout support
-requires asynchronous I/O. Its handshake timeout also covers close. Keep TCP deadlines
-disabled after control passes to the WebSocket stream. [Beast timeout contract](https://www.boost.org/doc/libs/latest/libs/beast/doc/html/beast/using_websocket/timeouts.html).
+- Separate the inactivity deadline from the outbound-ping interval; define whether and how
+  inactivity checking can be disabled independently of ping sending.
+- Define exactly what refreshes activity: complete data messages, fragmented-message progress,
+  incoming pings, and incoming pongs. Decide which of these prove the activity the caller needs;
+  receiving control frames alone must not silently imply that market data is arriving.
+- Use steady-clock durations without whole-second truncation. Schedule checks against the
+  selected inactivity deadline instead of deriving periodic sampling and grace from ping cadence.
+- Use explicit `switch`/`case` mappings for expiry, cancellation, timer errors, and terminal
+  cleanup. Queued expiries and obsolete-session completions must not rearm or notify after close
+  or reconnect; an idle failure must produce one terminal outcome with a clear reason.
+- Test activity near the deadline, delayed timer delivery, control-only traffic, fragmented
+  data, silence, cancellation with an expiry already queued, and reconnect before callbacks drain.
+
+Beast's WebSocket handshake/close timeout remains separate from our idle policy. Keep TCP
+deadlines disabled after control passes to the WebSocket stream.
+[Beast timeout contract](https://www.boost.org/doc/libs/latest/libs/beast/doc/html/beast/using_websocket/timeouts.html).
 
 TCP keepalive, WebSocket control frames, and exchange JSON/text heartbeats serve different
 purposes. Keep exchange-specific messages in the feeder/protocol layer. Do not add pong matching
@@ -503,8 +544,8 @@ Markdown/link and diff review.
 | [`WS-MOVE-COPY`](web_socket.cpp) | Consider enabling move/copy construction and assignment for web_socket (why are they disabled?). | [WS-02](#ws-02) |
 | [`WS-TLS-OWNERSHIP`](web_socket.cpp) | Review why the TLS context is at the web_socket level (could it move to session?). | [WS-02](#ws-02) |
 
-Batch 1, including the direct-header module boundary, is complete. Batch 2 is the next proposed change.
-Start batch 2 with session creation and the public-state/callback contracts; update the affected
-contract documentation alongside the implementation. The remaining contract/TODO audit follows in batch 3.
+Batch 1, including the direct-header module boundary, is complete. Batch 2 is in progress:
+eager session creation, `init`, and `conn_failed` naming are implemented. Continue with common
+terminal cleanup/detachment and the ownership/callback decisions. The remaining contract/TODO audit follows in batch 3.
 Coordinate the timer/clock redesign in batch 6 with the shared execution proposal in
 [current_work.md](current_work.md).

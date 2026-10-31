@@ -39,8 +39,6 @@ namespace nom
 
     struct web_socket::session : std::enable_shared_from_this<session>
     {
-        inline static const std::string null_id = "WS[NONE]";
-
     private:
         inline static std::atomic<std::uint64_t> next_id{0};
 
@@ -67,11 +65,41 @@ namespace nom
         // A session may outlive its owner while canceled operations complete.
         void close() noexcept
         {
-            // Detach first: queued completions cannot reach the old owner or a replacement session.
+            switch (status_)
+            {
+            case ws_status::init:
+                // No operations to cancel; keep the session ready for its first connect().
+                return;
+            case ws_status::connecting:
+                status_ = ws_status::conn_failed;
+                break;
+            case ws_status::connected:
+            case ws_status::disconnecting:
+                status_ = ws_status::disconnected;
+                break;
+            case ws_status::conn_failed:
+            case ws_status::disconnected:
+                // Repeated close preserves the terminal outcome.
+                break;
+            default:
+                assert(false && "Close requires a valid session state");
+                return;
+            }
+
+            // Detach before cancellation: queued completions cannot reach the old owner or a replacement session.
             parent_ = nullptr;
-            status_ = ws_status::disconnected;
 
             // Cleanup is best effort. Keep each attempt independent, without logging or delegate calls.
+            try
+            {
+                // The retained stream must not keep Beast's handshake/close timer alive after abort.
+                stream_.set_option(websocket::stream_base::timeout{.handshake_timeout = websocket::stream_base::none(),
+                                                                   .idle_timeout = websocket::stream_base::none(),
+                                                                   .keep_alive_pings = false});
+            }
+            catch (...)
+            {
+            }
             try
             {
                 beast::error_code ignored;
@@ -180,22 +208,19 @@ namespace nom
                     status_ = ws_status::conn_failed;
                     setup_error = "Unknown exception";
                 }
+
                 if (ws_status::conn_failed == status_)
-                {
                     parent_->delegate_(*parent_,
                                        event::network_error{.ts = std::chrono::steady_clock::now(),
                                                             .description = "TCP connect setup error",
                                                             .message = std::move(setup_error)});
-                }
                 break;
             }
-            case ws_status::disconnected:
-                // TODO: review this - We are not supposed to enter disconnected state before connected (also update the
-                // following assert message)
+            case ws_status::conn_failed:
                 // close() (including reconnect/destruction) abandoned this resolution before completion.
                 break;
             default:
-                assert(false && "Resolve completions require connecting or disconnected state");
+                assert(false && "Resolve completions require connecting or conn_failed state");
                 LERROR("{} Unexpected state: {}", id(), enum_to_string(status_));
                 break;
             }
@@ -256,21 +281,17 @@ namespace nom
                     setup_error = "Unknown exception";
                 }
                 if (ws_status::conn_failed == status_)
-                {
                     parent_->delegate_(*parent_,
                                        event::network_error{.ts = std::chrono::steady_clock::now(),
                                                             .description = "TLS handshake setup error",
                                                             .message = std::move(setup_error)});
-                }
                 break;
             }
-            case ws_status::disconnected:
-                // TODO: review this - We are not supposed to enter disconnected state before connected (also update the
-                // following assert message)
-                //  close() (including reconnect/destruction) abandoned TCP connect before completion.
+            case ws_status::conn_failed:
+                // close() (including reconnect/destruction) abandoned TCP connect before completion.
                 break;
             default:
-                assert(false && "TCP connect completions require connecting or disconnected state");
+                assert(false && "TCP connect completions require connecting or conn_failed state");
                 LERROR("{} Unexpected state: {}", id(), enum_to_string(status_));
                 break;
             }
@@ -323,22 +344,18 @@ namespace nom
                     setup_error = "Unknown exception";
                 }
                 if (ws_status::conn_failed == status_)
-                {
                     parent_->delegate_(*parent_,
                                        event::network_error{.ts = std::chrono::steady_clock::now(),
                                                             .description = "WebSocket handshake setup error",
                                                             .message = std::move(setup_error)});
-                }
                 break;
             }
-            case ws_status::disconnected:
-                // TODO: review this - We are not supposed to enter disconnected state before connected (also update the
-                // following assert message)
+            case ws_status::conn_failed:
                 // close() (including reconnect/destruction) abandoned the TLS handshake
                 // before completion.
                 break;
             default:
-                assert(false && "TLS handshake completions require connecting or disconnected state");
+                assert(false && "TLS handshake completions require connecting or conn_failed state");
                 LERROR("{} Unexpected state: {}", id(), enum_to_string(status_));
                 break;
             }
@@ -429,13 +446,11 @@ namespace nom
                 start_idle_timer();
                 break;
             }
-            case ws_status::disconnected:
-                // TODO: review this - We are not supposed to enter disconnected state before connected (also update the
-                // following assert message)
+            case ws_status::conn_failed:
                 // close() (including reconnect/destruction) abandoned the WebSocket handshake before completion.
                 break;
             default:
-                assert(false && "WebSocket handshake completions require connecting or disconnected state");
+                assert(false && "WebSocket handshake completions require connecting or conn_failed state");
                 LERROR("{} Unexpected state: {}", id(), enum_to_string(status_));
                 break;
             }
@@ -756,7 +771,7 @@ namespace nom
         net::steady_timer ping_timer_;
     };
 
-    // TODO[WS-EAGER-SESSION] (stage WS-02): Always create a session so web_socket::send
+    // DONE TODO[WS-EAGER-SESSION] (stage WS-02): Always create a session so web_socket::send
     // (and others) need not check for a valid session_ pointer.
     // TODO[WS-MOVE-COPY] (stage WS-02): Consider enabling move/copy construction and assignment
     // for web_socket (why are they disabled?).
@@ -769,6 +784,7 @@ namespace nom
             throw std::invalid_argument("Wrong web_socket URL scheme (expected wss://): " + url_.scheme());
         io_->ssl_ctx.set_default_verify_paths();
         io_->ssl_ctx.set_verify_mode(ssl::verify_peer);
+        session_ = std::make_shared<session>(this);
     }
 
     web_socket::web_socket(net::any_io_executor executor,
@@ -786,35 +802,37 @@ namespace nom
 
     void web_socket::connect(const delegate& callbacks)
     {
-        close();
-        delegate_ = callbacks;
-        session_ = std::make_shared<session>(this);
+        if (ws_status::init == session_->status())
+        {
+            delegate_ = callbacks;
+        }
+        else
+        {
+            close();
+            delegate_ = callbacks;
+            session_ = std::make_shared<session>(this);
+        }
         session_->connect();
     }
 
     void web_socket::close() noexcept
     {
-        if (auto active = std::exchange(session_, {}))
-            active->close();
+        session_->close();
     }
 
     bool web_socket::send(const std::string& text)
     {
-        if (session_)
-            return session_->send(text);
-        return false;
+        return session_->send(text);
     }
 
     const std::string& web_socket::session_id() const noexcept
     {
-        if (session_)
-            return session_->id();
-        return session::null_id;
+        return session_->id();
     }
 
     ws_status web_socket::status() const noexcept
     {
-        return session_ ? session_->status() : ws_status::disconnected;
+        return session_->status();
     }
 
 } // namespace nom

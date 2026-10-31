@@ -53,12 +53,30 @@ namespace
     throw std::bad_alloc{};
 }
 
+// Catch2 also uses nothrow new; keep it paired with the malloc/free replacement under ASan.
+[[gnu::noinline]] void* operator new(std::size_t size, const std::nothrow_t&) noexcept
+{
+    try
+    {
+        return ::operator new(size);
+    }
+    catch (...)
+    {
+        return nullptr;
+    }
+}
+
 [[gnu::noinline]] void operator delete(void* memory) noexcept
 {
     std::free(memory);
 }
 
 [[gnu::noinline]] void operator delete(void* memory, std::size_t) noexcept
+{
+    std::free(memory);
+}
+
+[[gnu::noinline]] void operator delete(void* memory, const std::nothrow_t&) noexcept
 {
     std::free(memory);
 }
@@ -89,6 +107,10 @@ TEST_CASE("Connection initiation exceptions leave a failed session and preserve 
     io.poll();
     CHECK(calls == 0);
     CHECK(nom::ws_status::conn_failed == client.status());
+    const auto failed_id = client.session_id();
+    client.close();
+    CHECK(nom::ws_status::conn_failed == client.status());
+    CHECK(client.session_id() == failed_id);
 
     // A new attempt replaces the failed session and can still be canceled normally.
     io.restart();
@@ -96,7 +118,7 @@ TEST_CASE("Connection initiation exceptions leave a failed session and preserve 
     CHECK(nom::ws_status::connecting == client.status());
     client.close();
     io.run();
-    CHECK(nom::ws_status::disconnected == client.status());
+    CHECK(nom::ws_status::conn_failed == client.status());
     CHECK(calls == 0);
 }
 
@@ -113,16 +135,16 @@ TEST_CASE("Closing suppresses resolver cancellation allocation failure and queue
 
     {
         // Resolver cancellation allocates a fresh cancellation token after close() detaches the session.
-        connection_allocation_failure failure(client, nom::ws_status::disconnected);
+        connection_allocation_failure failure(client, nom::ws_status::conn_failed);
         client.close();
     }
     REQUIRE(failure_injected);
-    CHECK(nom::ws_status::disconnected == client.status());
+    CHECK(nom::ws_status::conn_failed == client.status());
     CHECK(calls == 0);
 
     // Even if cancellation failed, the pending resolver completion must not reach the delegate.
     io.run();
     CHECK(calls == 0);
     client.close();
-    CHECK(nom::ws_status::disconnected == client.status());
+    CHECK(nom::ws_status::conn_failed == client.status());
 }
