@@ -30,7 +30,8 @@ int main(int argc, char** argv)
         bool accepted = false;
         unsigned connected = 0;
         unsigned network_errors = 0;
-        bool setup_failure = false;
+        bool expected_failure = false;
+        std::string_view expected_description;
         const auto finish = [&]
         {
             client.close();
@@ -52,10 +53,14 @@ int main(int argc, char** argv)
                 else if constexpr (std::same_as<event_type, nom::event::network_error>)
                 {
                     ++network_errors;
-                    setup_failure = nom::ws_status::conn_failed == client.status() &&
-                                    event.description == "WebSocket handshake setup error" && !event.message.empty();
+                    expected_failure = nom::ws_status::conn_failed == client.status() &&
+                                       event.description == expected_description && !event.message.empty();
+                    expected_failure = !client.send("after connection failure") && expected_failure;
+                    const auto failed_id = client.session_id();
                     std::cerr << event.description << ": " << event.message << '\n';
                     finish();
+                    expected_failure = expected_failure && client.status() == nom::ws_status::conn_failed &&
+                                       client.session_id() == failed_id;
                 }
                 else if constexpr (std::same_as<event_type, nom::event::on_disconnected>)
                 {
@@ -64,13 +69,14 @@ int main(int argc, char** argv)
                 }
             }};
 
-        for (unsigned attempt = 0; attempt < 5; ++attempt)
+        for (unsigned attempt = 0; attempt < 6; ++attempt)
         {
             io.restart();
             accepted = false;
             connected = 0;
             network_errors = 0;
-            setup_failure = false;
+            expected_failure = false;
+            expected_description = attempt == 3 ? "WebSocket handshake setup error" : "Connect/Handshake error";
             deadline.expires_after(std::chrono::seconds(5));
             deadline.async_wait(
                 [&](const boost::system::error_code& error)
@@ -122,9 +128,9 @@ int main(int argc, char** argv)
             }
 
             io.run();
-            if (attempt == 3)
+            if (attempt == 3 || attempt == 4)
             {
-                if (!setup_failure || network_errors != 1 || connected != 0 || accepted)
+                if (!expected_failure || network_errors != 1 || connected != 0 || accepted)
                     return 1;
             }
             else if (!accepted || connected != 1 || network_errors != 0)

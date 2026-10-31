@@ -85,7 +85,7 @@ int main(int argc, char** argv)
                         fail("Close completion must transition disconnecting to disconnected");
                         return;
                     }
-                    // Keep the session attached while remaining completions drain, so duplicate
+                    // Keep the terminal session owned while remaining completions drain, so duplicate
                     // terminal events remain observable. No receive or timer work should start.
                     deadline.cancel();
                 }

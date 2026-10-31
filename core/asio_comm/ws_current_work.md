@@ -131,8 +131,7 @@ Setup completion guards now ignore `conn_failed` instead of `disconnected`. Expl
 disables Beast handshake/close timeouts: retaining the stream must not leave its internal
 timer keeping the executor alive after transport cancellation.
 Each stateful session operation or handler uses one entry-state `switch`/`case` mapping. Mid-function
-checks for setup failure or state changes during delegate calls use concise `if (status_ ...)`
-guards. Cleanup and status/identity retention follow the same lifecycle contract.
+checks for state changes during delegate calls use concise `if (status_ ...)` guards. Cleanup and status/identity retention follow the same lifecycle contract.
 The `web_socket` wrapper is a holder and forwarding interface, not another state machine. Its
 `connect()` uses an existing `init` session directly; otherwise it closes and replaces it,
 assuming only that the new session starts in `init`. It does not branch on post-close states.
@@ -157,10 +156,62 @@ and LeakSanitizer ran with the required sandbox access. Bootstrap setup could no
 metadata; direct CMake presets provided build/test validation. Formatting, SPDX headers, local
 links, TODO references, and diff checks pass.
 
-**Remaining lifecycle work:** connection failures can leave the transport attached until
-explicit close or replacement. Peer-close/read-error paths cancel the idle timer but can
-leave a ping wait pending. Common finalization, automatic terminal detachment, move/copy, and
-TLS-ownership decisions remain open; this change does not complete WS-02.
+**Remaining lifecycle work:** terminal states are now detached, but resource cleanup remains
+a separate task. Peer-close/read-error paths cancel the idle timer but can leave a ping wait
+pending. Common transport/timer finalization, move/copy, and TLS-ownership decisions remain
+open; these two completed TODOs do not complete WS-02.
+
+**Terminal-state review — 2026-11-01:** `WS-TERMINAL-FAILURE` is complete as a state-machine
+contract. `conn_failed` and `disconnected` both terminate their session; creating a replacement
+session is distinct from changing the old session's terminal state.
+
+| Path / operation | Reviewed behavior |
+| --- | --- |
+| DNS initiation throws in `session::connect()` | Set `conn_failed` before rethrowing; no delegate notification. |
+| DNS, TCP, TLS, or WebSocket completion reports an error | Set `conn_failed`, emit `network_error`, and stop that handler without starting the next stage. |
+| TCP/TLS/WebSocket setup throws; SNI setup fails; WebSocket completion setup throws | Select `conn_failed` and detach before reporting failure; setup exceptions notify directly from the catches through an owner-capturing lambda. |
+| Explicit close while connecting | Select `conn_failed`, detach and cancel; suppress delegate notifications. |
+| Late connection-stage completion, including already queued success | The `conn_failed` case ignores it without dereferencing `parent_` or starting work. |
+| Send or reconnect | Send rejects the terminal session; wrapper reconnect closes and replaces it. `session::connect()` itself starts only from `init`. |
+| Repeated close or destruction | Preserve `conn_failed`; neither turns it into `disconnected`. |
+
+Reads, control callbacks, idle/ping waits, ping sends, and graceful-close completions start
+only after `connected` (or from its `disconnecting` phase). Their switches therefore do not
+need a `conn_failed` case: that state is reachable only before the session ever connects.
+Failures while connected select `disconnected`, so there is no connected-to-`conn_failed` edge.
+Throws during diagnostic/event construction cannot change the terminal state back; notification
+and cleanup guarantees under those exceptions remain part of WS-08.
+
+**Detachment implementation — 2026-11-01:** `WS-DETACH` is complete. All runtime state writes
+use `set_status<NewStatus>()`; selecting either terminal state clears `parent_`. The helper
+rejects self-transitions and transitions from a detached session in debug builds, and forbids
+selecting `init` after construction. `status()` checks the terminal/detachment invariant.
+Repeated close preserves the terminal state without invoking a self-transition.
+
+Connection handlers capture their owner in a local notification lambda before setup. Each
+catch selects `conn_failed` and invokes that lambda directly, without an intermediate error
+string or a post-catch status test. Detachment precedes copying the error text, logging, and
+constructing the event. Exceptions from message construction or a delegate in a catch body
+propagate out; another catch on the original try does not handle them. Peer-close, read-error,
+and close-completion paths snapshot the owner locally before selecting `disconnected`, then
+send the final notification through that saved pointer. They do not call `close()` merely to
+detach while Beast is still processing a protocol operation. The wrapper remains a holder and
+requires no knowledge of these state transitions.
+
+The tests exercise synchronous initiation failure, cancellation before resolution completion,
+repeated close, rejected terminal sends, reconnect/destruction with old handlers, TLS
+certificate rejection, a handshake setup exception, rejected WebSocket upgrades, and recovery.
+They do not inject every SNI/setup failure or cancel separately at each TCP/TLS/upgrade stage.
+Debug invariant checks verify detachment when tests query terminal status or call close.
+
+**Terminal/detachment validation:** the GCC 16 `complete` build and all seven tests pass.
+The Clang 22 AddressSanitizer build and the unit, local TLS loopback, and exchange-feeder
+suites pass, with leak and allocation-mismatch checks enabled. The upgrade-rejection fixture
+checks one failure event, no connected event, rejected sends, preserved state/identity through
+close, and recovery on a fresh attempt. Formatting, headers, Python checks, local links, TODO
+references, and diff checks pass. Bootstrap setup still cannot write Git metadata; validation
+used direct CMake presets, with localhost/LeakSanitizer access for the relevant tests.
+
 
 Implement this batch as four reviewable steps:
 
@@ -191,10 +242,10 @@ state until its first attempt, including after repeated `close()` before connect
 
 **Detachment direction:** explicit close clears `session::parent_` and retains the wrapper's
 `session_`, preserving status and identity. Reconnect replaces it; old completions retain the
-old session and ignore its terminal state. Automatic detachment after network failures and
-peer close remains to be implemented as part of the common finalization policy. That policy
-must preserve `conn_failed` for attempts that never connected and `disconnected` after a
-successful connection. Connection-stage guards now accept `connecting` or `conn_failed`.
+old session and ignore its terminal state. All failure and disconnection transitions now
+detach automatically through `set_status<NewStatus>()`. Transport/timer finalization still
+needs a common policy, preserving `conn_failed` for attempts that never connected and
+`disconnected` after connection. Connection-stage guards accept `connecting` or `conn_failed`.
 
 **Callback options:** require reconnect/delegate replacement to be posted until after the
 callback returns, or retain stable callback storage throughout invocation so replacement is
@@ -546,6 +597,6 @@ Markdown/link and diff review.
 
 Batch 1, including the direct-header module boundary, is complete. Batch 2 is in progress:
 eager session creation, `init`, and `conn_failed` naming are implemented. Continue with common
-terminal cleanup/detachment and the ownership/callback decisions. The remaining contract/TODO audit follows in batch 3.
+transport/timer cleanup and the ownership/callback decisions; terminal states and detachment are complete. The remaining contract/TODO audit follows in batch 3.
 Coordinate the timer/clock redesign in batch 6 with the shared execution proposal in
 [current_work.md](current_work.md).

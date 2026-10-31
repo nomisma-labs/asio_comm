@@ -18,8 +18,8 @@ stages; these are not additional `ws_status` values. A fresh session starts in `
 `session.connect()` enters `connecting` before starting resolution. Terminal sessions are never reused.
 Ownership and destruction are described below; callback guards use `status_` only.
 Each stateful session operation or handler uses one `switch`/`case` for entry-state dispatch.
-Mid-function state checks, including setup outcomes and guards after delegate calls, use
-concise `if (status_ ...)` conditions. A switch on control-frame kind handles a separate input.
+Mid-function state checks, such as guards after delegate calls, use concise
+`if (status_ ...)` conditions. A switch on control-frame kind handles a separate input.
 Edge labels use **event [condition] / action**; entering a top-level state implies its stored status.
 Multiple events on one transition are separated by commas; `/` separates an event from its actions.
 Transitions from the `connecting` group apply to every stage within it.
@@ -93,14 +93,20 @@ stateDiagram-v2
   resolver/timer cancellation.
   Cleanup exceptions are suppressed; no event is delivered. The wrapper retains its session
   and identity after close, until reconnect or destruction.
-- `disconnected` covers both an attached session whose connection ended and a detached session
-  after `close()`. Reaching it does not destroy the object: pending handlers may retain shared
-  ownership. Destruction occurs when the last shared owner releases the session.
+- `disconnected` and `conn_failed` always have `parent_ == nullptr`. The wrapper may still
+  own the terminal session for status and identity queries. Reaching a terminal state does not
+  destroy the object: pending handlers may retain shared ownership. Destruction occurs when
+  the last shared owner releases the session.
+- `conn_failed` is terminal for the same session. Setup failure or cancellation before connection
+  selects it; further connection completions do nothing, `send()` rejects writes, and repeated
+  `close()` preserves it. Reconnect replaces the session rather than resetting that terminal state.
+  Terminal status implies detachment; complete transport cleanup remains a separate concern.
 - `shutdown()` is an internal helper that requires connected status. Any other status is
   a precondition violation: assert, or log and return when assertions are disabled. Pending attempts are
-  cancelled through `close()`, which detaches the session. Sessions that enter `conn_failed` or
-  `disconnected` through operation completions remain attached until `close()`, reconnect or
-  owner destruction; those transitions do not automatically detach them.
+  cancelled through `close()`. Every transition to `conn_failed` or `disconnected` uses
+  `set_status<NewStatus>()`, which detaches before notification or further error construction.
+  Debug checks reject self-transitions, a return to `init`, and transitions from a detached
+  session. `status()` also checks that terminal status and detachment agree.
 - The first close-frame, read-error or close-completion handler that sees `connected` or
   `disconnecting` sets `disconnected` and emits `on_disconnected`. Later handlers do not emit another terminal event.
   A `CloseDone` error does not select `ConnFailed` on this path.
@@ -167,12 +173,14 @@ and ends the chain. Cancellation through `close()`, reconnect, or owner destruct
 `conn_failed` before cancelling setup operations, so queued completions stop without checking
 `parent_`. This includes successful completions already queued when cancellation occurs.
 The synchronous socket setup and handshake request decorator assert connecting.
-Setup and operation-initiation exceptions inside these completion handlers set `conn_failed` and
-emit `network_error` after leaving the catch. The event identifies the failed stage and carries
+Setup and operation-initiation exceptions inside these completion handlers select `conn_failed`
+and detach in the catch body. A local notification lambda captures the owner before setup and
+emits `network_error` directly from the catch. The event identifies the failed stage and carries
 `std::exception::what()`, or `Unknown exception` for other exception types. The original setup
-exception is suppressed. Delegate calls remain outside the guarded operations, so callback
-exceptions are not translated into another network error. The failed session stays attached
-until `close()` and remains owned by the wrapper until reconnect or destruction.
+exception is suppressed. Message copying and notification happen after detachment; exceptions
+from a catch body propagate instead of being caught by another handler of the same try block.
+Ordinary completion errors use the same saved recipient. The wrapper continues owning the
+detached session until reconnect or destruction.
 
 - **`ResolveDone`** — `on_resolve`: successful DNS resolution starts TCP connect.
 - **`TcpConnectDone`** — `on_connect`: successful TCP connection and SNI setup start the
@@ -286,7 +294,8 @@ These are outputs of the current machine, shown as actions on edges:
 - **`nom::event::on_disconnected`** — the first applicable peer-close, read-error or close-completion
   handler that changes status from `connected` or `disconnecting` to `disconnected`.
 - **`nom::event::network_error`** — connection-chain failure. A read or close-completion error while
-  connected or disconnecting emits `on_disconnected` instead.
+  connected or disconnecting emits `on_disconnected` instead. Terminal events use a recipient
+  saved before detachment; no terminal handler dereferences `parent_` to notify the owner.
 
 ## Usage constraints and deferred work
 
@@ -319,7 +328,8 @@ The existing tests cover:
 - Local TLS send/echo, fragmented messages with interleaved ping/pong, server-pushed data,
   peer close, partial-frame EOF, close from a data callback, and certificate/hostname rejection.
 - Live headers/User-Agent settings, retained/reset parameters on reconnect, three successive
-  configured pings, and handshake setup exception reporting followed by a fresh connection.
+  configured pings, handshake setup exception reporting, rejected upgrades, retained terminal
+  state after rejected sends/close, and recovery through a fresh connection.
 - Write-failure transition to disconnecting, rejected further sends, one terminal notification,
   and prevention of receive/timer startup when closing from the connected callback.
 - Separate consumers built against both the source tree and installed package.

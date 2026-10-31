@@ -42,7 +42,7 @@ def read_frame(connection):
     return first, bytes(value ^ mask[index % 4] for index, value in enumerate(payload))
 
 
-def handshake(connection, port, expected_headers=None, absent_headers=(), target="/feed%2Fone?topic=two"):
+def handshake(connection, port, expected_headers=None, absent_headers=(), target="/feed%2Fone?topic=two", reject=False):
     request = b""
     while not request.endswith(b"\r\n\r\n"):
         request += receive_exact(connection, 1)
@@ -56,6 +56,9 @@ def handshake(connection, port, expected_headers=None, absent_headers=(), target
         assert headers.get(name) == value, (name, headers)
     for name in absent_headers:
         assert name not in headers, (name, headers)
+    if reject:
+        connection.sendall(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n")
+        return
     accept = base64.b64encode(
         hashlib.sha1((headers["sec-websocket-key"] + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode()).digest()
     ).decode()
@@ -139,6 +142,7 @@ def run_headers_case(client, context, certificate):
         ({"authorization": "Bearer second", "x-attempt": "second", "user-agent": "headers-test/2"}, ()),
         ({"authorization": "Bearer second", "x-attempt": "second", "user-agent": "headers-test/2"}, ()),
         (None, ()),  # Oversized header: client must report the setup exception before sending HTTP.
+        ({}, ("authorization", "x-attempt", "x-oversized")),  # Rejected upgrade must remain conn_failed.
         ({}, ("authorization", "x-attempt", "x-oversized")),
     )
     with socket.socket() as listener:
@@ -158,7 +162,10 @@ def run_headers_case(client, context, certificate):
                                 if expected is None:
                                     assert connection.recv(1024) == b"", "unexpected HTTP request after setup failure"
                                     continue
-                                handshake(connection, port, expected, absent)
+                                handshake(connection, port, expected, absent, reject=attempt == 4)
+                                if attempt == 4:
+                                    assert connection.recv(1024) == b"", "unexpected data after rejected upgrade"
+                                    continue
                                 if attempt == 2:
                                     # Repeated pings verify that completion rearms the timer.
                                     for _ in range(3):
@@ -184,7 +191,7 @@ def run_headers_case(client, context, certificate):
         assert not worker.is_alive(), "headers: server did not stop"
         assert not errors, f"headers: server errors: {errors}; client: {result.stdout} {result.stderr}"
         assert result.returncode == 0, result.stdout + result.stderr
-        print("params: passed (live headers/agent, retained settings, repeated pings, reset, setup exception, recovery)")
+        print("params: passed (live headers/agent, pings, reset, setup exception, rejected upgrade, recovery)")
 
 
 def run_disconnecting_case(client, context, certificate):

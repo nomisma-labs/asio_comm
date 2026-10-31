@@ -42,6 +42,17 @@ namespace nom
     private:
         inline static std::atomic<std::uint64_t> next_id{0};
 
+        template <ws_status NewStatus> void set_status() noexcept
+        {
+            static_assert(NewStatus != ws_status::init, "Only construction may select init");
+            assert(static_cast<std::uint8_t>(status_) < static_cast<std::uint8_t>(NewStatus) &&
+                   "State transitions must change the state in increasing order");
+            assert(parent_ && "State transitions require an attached session");
+            status_ = NewStatus;
+            if constexpr (NewStatus == ws_status::conn_failed || NewStatus == ws_status::disconnected)
+                parent_ = nullptr;
+        }
+
     public:
         session(web_socket* owner)
             : parent_(owner),
@@ -71,11 +82,11 @@ namespace nom
                 // No operations to cancel; keep the session ready for its first connect().
                 return;
             case ws_status::connecting:
-                status_ = ws_status::conn_failed;
+                set_status<ws_status::conn_failed>();
                 break;
             case ws_status::connected:
             case ws_status::disconnecting:
-                status_ = ws_status::disconnected;
+                set_status<ws_status::disconnected>();
                 break;
             case ws_status::conn_failed:
             case ws_status::disconnected:
@@ -85,9 +96,6 @@ namespace nom
                 assert(false && "Close requires a valid session state");
                 return;
             }
-
-            // Detach before cancellation: queued completions cannot reach the old owner or a replacement session.
-            parent_ = nullptr;
 
             // Cleanup is best effort. Keep each attempt independent, without logging or delegate calls.
             try
@@ -149,7 +157,7 @@ namespace nom
             {
             case ws_status::init:
             {
-                status_ = ws_status::connecting;
+                set_status<ws_status::connecting>();
 
                 try
                 {
@@ -159,7 +167,7 @@ namespace nom
                 }
                 catch (...)
                 {
-                    status_ = ws_status::conn_failed;
+                    set_status<ws_status::conn_failed>();
                     throw;
                 }
                 break;
@@ -178,19 +186,22 @@ namespace nom
             {
             case ws_status::connecting:
             {
+                const auto notify_error = [owner = parent_](std::string_view description, std::string_view message)
+                {
+                    owner->delegate_(*owner,
+                                     event::network_error{.ts = std::chrono::steady_clock::now(),
+                                                          .description = std::string(description),
+                                                          .message = std::string(message)});
+                };
                 // connect() entered connecting and started DNS resolution.
                 if (ec)
                 {
-                    status_ = ws_status::conn_failed;
+                    set_status<ws_status::conn_failed>();
                     LERROR("{} Resolve error: {}", id(), ec.message());
-                    parent_->delegate_(*parent_,
-                                       event::network_error{.ts = std::chrono::steady_clock::now(),
-                                                            .description = "Resolve error",
-                                                            .message = ec.message()});
+                    notify_error("Resolve error", ec.message());
                     break;
                 }
 
-                std::string setup_error;
                 try
                 {
                     beast::get_lowest_layer(stream_).expires_after(
@@ -200,20 +211,15 @@ namespace nom
                 }
                 catch (const std::exception& error)
                 {
-                    status_ = ws_status::conn_failed;
-                    setup_error = error.what();
+                    set_status<ws_status::conn_failed>();
+                    notify_error("TCP connect setup error", error.what());
                 }
                 catch (...)
                 {
-                    status_ = ws_status::conn_failed;
-                    setup_error = "Unknown exception";
+                    set_status<ws_status::conn_failed>();
+                    notify_error("TCP connect setup error", "Unknown exception");
                 }
 
-                if (ws_status::conn_failed == status_)
-                    parent_->delegate_(*parent_,
-                                       event::network_error{.ts = std::chrono::steady_clock::now(),
-                                                            .description = "TCP connect setup error",
-                                                            .message = std::move(setup_error)});
                 break;
             }
             case ws_status::conn_failed:
@@ -232,31 +238,31 @@ namespace nom
             {
             case ws_status::connecting:
             {
+                const auto notify_error = [owner = parent_](std::string_view description, std::string_view message)
+                {
+                    owner->delegate_(*owner,
+                                     event::network_error{.ts = std::chrono::steady_clock::now(),
+                                                          .description = std::string(description),
+                                                          .message = std::string(message)});
+                };
                 // on_resolve() started TCP connect while the connection attempt remained active.
                 if (ec)
                 {
-                    status_ = ws_status::conn_failed;
+                    set_status<ws_status::conn_failed>();
                     LERROR("{} Connect error: {}", id(), ec.message());
-                    parent_->delegate_(*parent_,
-                                       event::network_error{.ts = std::chrono::steady_clock::now(),
-                                                            .description = "Connect error",
-                                                            .message = ec.message()});
+                    notify_error("Connect error", ec.message());
                     break;
                 }
 
                 if (!SSL_set_tlsext_host_name(stream_.next_layer().native_handle(), parent_->url_.host().c_str()))
                 {
-                    status_ = ws_status::conn_failed;
+                    set_status<ws_status::conn_failed>();
                     ec = beast::error_code(static_cast<int>(::ERR_get_error()), net::error::get_ssl_category());
                     LERROR("{} Connect error: {}", id(), ec.message());
-                    parent_->delegate_(*parent_,
-                                       event::network_error{.ts = std::chrono::steady_clock::now(),
-                                                            .description = "Connect/SSL error",
-                                                            .message = ec.message()});
+                    notify_error("Connect/SSL error", ec.message());
                     break;
                 }
 
-                std::string setup_error;
                 try
                 {
                     apply_socket_options();
@@ -272,19 +278,14 @@ namespace nom
                 }
                 catch (const std::exception& error)
                 {
-                    status_ = ws_status::conn_failed;
-                    setup_error = error.what();
+                    set_status<ws_status::conn_failed>();
+                    notify_error("TLS handshake setup error", error.what());
                 }
                 catch (...)
                 {
-                    status_ = ws_status::conn_failed;
-                    setup_error = "Unknown exception";
+                    set_status<ws_status::conn_failed>();
+                    notify_error("TLS handshake setup error", "Unknown exception");
                 }
-                if (ws_status::conn_failed == status_)
-                    parent_->delegate_(*parent_,
-                                       event::network_error{.ts = std::chrono::steady_clock::now(),
-                                                            .description = "TLS handshake setup error",
-                                                            .message = std::move(setup_error)});
                 break;
             }
             case ws_status::conn_failed:
@@ -303,19 +304,22 @@ namespace nom
             {
             case ws_status::connecting:
             {
+                const auto notify_error = [owner = parent_](std::string_view description, std::string_view message)
+                {
+                    owner->delegate_(*owner,
+                                     event::network_error{.ts = std::chrono::steady_clock::now(),
+                                                          .description = std::string(description),
+                                                          .message = std::string(message)});
+                };
                 // on_connect() completed TCP/SNI setup and started the TLS handshake.
                 if (ec)
                 {
-                    status_ = ws_status::conn_failed;
+                    set_status<ws_status::conn_failed>();
                     LERROR("{} Connect/SSL handshake error: {}", id(), ec.message());
-                    parent_->delegate_(*parent_,
-                                       event::network_error{.ts = std::chrono::steady_clock::now(),
-                                                            .description = "Connect/SSL handshake error",
-                                                            .message = ec.message()});
+                    notify_error("Connect/SSL handshake error", ec.message());
                     break;
                 }
 
-                std::string setup_error;
                 try
                 {
                     // Beast's WebSocket timeout takes over after the TLS handshake.
@@ -335,19 +339,14 @@ namespace nom
                 }
                 catch (const std::exception& error)
                 {
-                    status_ = ws_status::conn_failed;
-                    setup_error = error.what();
+                    set_status<ws_status::conn_failed>();
+                    notify_error("WebSocket handshake setup error", error.what());
                 }
                 catch (...)
                 {
-                    status_ = ws_status::conn_failed;
-                    setup_error = "Unknown exception";
+                    set_status<ws_status::conn_failed>();
+                    notify_error("WebSocket handshake setup error", "Unknown exception");
                 }
-                if (ws_status::conn_failed == status_)
-                    parent_->delegate_(*parent_,
-                                       event::network_error{.ts = std::chrono::steady_clock::now(),
-                                                            .description = "WebSocket handshake setup error",
-                                                            .message = std::move(setup_error)});
                 break;
             }
             case ws_status::conn_failed:
@@ -391,43 +390,40 @@ namespace nom
             {
             case ws_status::connecting:
             {
+                const auto notify_error = [owner = parent_](std::string_view description, std::string_view message)
+                {
+                    owner->delegate_(*owner,
+                                     event::network_error{.ts = std::chrono::steady_clock::now(),
+                                                          .description = std::string(description),
+                                                          .message = std::string(message)});
+                };
                 // on_ssl_handshake() completed TLS setup and started the WebSocket handshake.
-                std::string setup_error;
                 try
                 {
                     beast::get_lowest_layer(stream_).expires_never();
                 }
                 catch (const std::exception& error)
                 {
-                    status_ = ws_status::conn_failed;
-                    setup_error = error.what();
+                    set_status<ws_status::conn_failed>();
+                    notify_error("WebSocket handshake completion error", error.what());
+                    break;
                 }
                 catch (...)
                 {
-                    status_ = ws_status::conn_failed;
-                    setup_error = "Unknown exception";
-                }
-                if (ws_status::conn_failed == status_)
-                {
-                    parent_->delegate_(*parent_,
-                                       event::network_error{.ts = std::chrono::steady_clock::now(),
-                                                            .description = "WebSocket handshake completion error",
-                                                            .message = std::move(setup_error)});
+                    set_status<ws_status::conn_failed>();
+                    notify_error("WebSocket handshake completion error", "Unknown exception");
                     break;
                 }
                 if (ec)
                 {
-                    status_ = ws_status::conn_failed;
+                    set_status<ws_status::conn_failed>();
                     LERROR("{} Connect/Handshake error: {}", id(), ec.message());
-                    parent_->delegate_(*parent_,
-                                       event::network_error{.ts = std::chrono::steady_clock::now(),
-                                                            .description = "Connect/Handshake error",
-                                                            .message = ec.message()});
+                    notify_error("Connect/Handshake error", ec.message());
                     break;
                 }
                 last_recv_ts_ = std::chrono::steady_clock::now();
                 LDEBUG("{} connected", id());
-                status_ = ws_status::connected;
+                set_status<ws_status::connected>();
                 parent_->delegate_(*parent_, event::on_connected{.ts = last_recv_ts_});
                 // The delegate may call close() or trigger a write-failure shutdown before receive/timer work starts.
                 if (ws_status::connected != status_)
@@ -484,9 +480,10 @@ namespace nom
                 {
                     LDEBUG("{} Close request received from server", id());
                     idle_timer_.cancel();
-                    status_ = ws_status::disconnected;
-                    parent_->delegate_(
-                        *parent_,
+                    web_socket* const owner = parent_;
+                    set_status<ws_status::disconnected>();
+                    owner->delegate_(
+                        *owner,
                         event::on_disconnected{.ts = std::chrono::steady_clock::now(), .reason = "Closed by server"});
                     break;
                 }
@@ -644,10 +641,10 @@ namespace nom
                 if (ec)
                 {
                     idle_timer_.cancel();
-                    status_ = ws_status::disconnected;
-                    parent_->delegate_(
-                        *parent_,
-                        event::on_disconnected{.ts = std::chrono::steady_clock::now(), .reason = ec.message()});
+                    web_socket* const owner = parent_;
+                    set_status<ws_status::disconnected>();
+                    owner->delegate_(
+                        *owner, event::on_disconnected{.ts = std::chrono::steady_clock::now(), .reason = ec.message()});
                     break;
                 }
 
@@ -714,7 +711,7 @@ namespace nom
             {
             case ws_status::connected:
             {
-                status_ = ws_status::disconnecting;
+                set_status<ws_status::disconnecting>();
                 idle_timer_.cancel();
                 ping_timer_.cancel();
 
@@ -743,9 +740,10 @@ namespace nom
                     LWARN("{} Shutdown error: {}", id(), error_message);
                 }
 
-                status_ = ws_status::disconnected;
-                parent_->delegate_(
-                    *parent_, event::on_disconnected{.ts = std::chrono::steady_clock::now(), .reason = error_message});
+                web_socket* const owner = parent_;
+                set_status<ws_status::disconnected>();
+                owner->delegate_(
+                    *owner, event::on_disconnected{.ts = std::chrono::steady_clock::now(), .reason = error_message});
                 break;
             }
             case ws_status::disconnected:
@@ -760,7 +758,7 @@ namespace nom
         }
 
         ws_status status_{ws_status::init};
-        web_socket* parent_; // Null once web_socket::close() has disowned this session.
+        web_socket* parent_; // Null in either terminal state; the wrapper may still retain this session.
         std::string id_;
         tcp::resolver resolver_;
         websocket::stream<beast::ssl_stream<beast::tcp_stream>> stream_;

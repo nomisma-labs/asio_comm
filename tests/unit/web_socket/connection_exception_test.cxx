@@ -107,6 +107,8 @@ TEST_CASE("Connection initiation exceptions leave a failed session and preserve 
     io.poll();
     CHECK(calls == 0);
     CHECK(nom::ws_status::conn_failed == client.status());
+    CHECK_FALSE(client.send("after connection failure"));
+    CHECK(nom::ws_status::conn_failed == client.status());
     const auto failed_id = client.session_id();
     client.close();
     CHECK(nom::ws_status::conn_failed == client.status());
