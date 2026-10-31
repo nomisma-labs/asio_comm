@@ -124,7 +124,7 @@ TEST_CASE("Connection initiation exceptions leave a failed session and preserve 
     CHECK(calls == 0);
 }
 
-TEST_CASE("Closing suppresses resolver cancellation allocation failure and queued events")
+TEST_CASE("Closing pending setup does not allocate and suppresses queued events")
 {
     STATIC_REQUIRE(noexcept(std::declval<nom::web_socket&>().close()));
 
@@ -136,15 +136,15 @@ TEST_CASE("Closing suppresses resolver cancellation allocation failure and queue
     REQUIRE(nom::ws_status::connecting == client.status());
 
     {
-        // Resolver cancellation allocates a fresh cancellation token after close() selects a terminal state.
+        // Releasing setup cancels resolution without allocating a replacement cancellation token.
         connection_allocation_failure failure(client, nom::ws_status::conn_failed);
         client.close();
     }
-    REQUIRE(failure_injected);
+    CHECK_FALSE(failure_injected);
     CHECK(nom::ws_status::conn_failed == client.status());
     CHECK(calls == 0);
 
-    // Even if cancellation failed, the pending resolver completion must not reach the delegate.
+    // The pending resolver completion must not reach the delegate after setup is released.
     io.run();
     CHECK(calls == 0);
     client.close();

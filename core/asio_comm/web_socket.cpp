@@ -44,12 +44,24 @@ namespace nom
     private:
         inline static std::atomic<std::uint64_t> next_id{0};
 
+        struct setup_state
+        {
+            explicit setup_state(const net::any_io_executor& executor) : resolver(executor)
+            {
+            }
+
+            tcp::resolver resolver;
+            std::string host_header;
+        };
+
         template <ws_status NewStatus> void set_status() noexcept
         {
             static_assert(NewStatus != ws_status::init, "Only construction may select init");
             assert(static_cast<std::uint8_t>(status_) < static_cast<std::uint8_t>(NewStatus) &&
                    "State transitions must change the state in increasing order");
             status_ = NewStatus;
+            if constexpr (NewStatus == ws_status::connected || NewStatus == ws_status::conn_failed)
+                setup_.reset();
         }
 
     public:
@@ -62,8 +74,8 @@ namespace nom
                       strm << "WS[" << parent_->url_ << ':' << next_id.fetch_add(1, std::memory_order_relaxed) << ']';
                       return strm.str();
                   }()},
-              resolver_(parent_->io_->executor), stream_(parent_->io_->executor, parent_->io_->ssl_ctx),
-              idle_timer_(parent_->io_->executor), ping_timer_(parent_->io_->executor)
+              stream_(parent_->io_->executor, parent_->io_->ssl_ctx), idle_timer_(parent_->io_->executor),
+              ping_timer_(parent_->io_->executor)
         {
         }
 
@@ -127,13 +139,6 @@ namespace nom
             }
             try
             {
-                resolver_.cancel();
-            }
-            catch (...)
-            {
-            }
-            try
-            {
                 idle_timer_.cancel();
             }
             catch (...)
@@ -156,7 +161,7 @@ namespace nom
         // TODO IDs and stage definitions: ws_current_work.md.
         // TODO[WS-CONNECT-DEADLINE] (stage WS-06): Make the connection procedure time-bound
         // (we can use default_async_operation_timeout_sec for it).
-        // TODO[WS-SETUP-STORAGE] (stage WS-02): Dispose of state required only for connection setup
+        // DONE TODO[WS-SETUP-STORAGE] (stage WS-02): Dispose of state required only for connection setup
         // after the connection is established (e.g. resolver).
         // TODO[WS-TRANSPORT-OPTIONS] (stage WS-09): Test various connection options
         // (different TLS levels, no SSL?).
@@ -170,9 +175,10 @@ namespace nom
 
                 try
                 {
-                    resolver_.async_resolve(parent_->url_.host(),
-                                            std::to_string(parent_->url_.port()),
-                                            beast::bind_front_handler(&session::on_resolve, shared_from_this()));
+                    setup_ = std::make_unique<setup_state>(parent_->io_->executor);
+                    setup_->resolver.async_resolve(parent_->url_.host(),
+                                                   std::to_string(parent_->url_.port()),
+                                                   beast::bind_front_handler(&session::on_resolve, shared_from_this()));
                 }
                 catch (...)
                 {
@@ -278,8 +284,8 @@ namespace nom
 
                     // The HTTP Host header brackets IPv6 literals; DNS and TLS use the unbracketed host.
                     const auto& host = parent_->url_.host();
-                    host_header_ = (std::string::npos == host.find(':') ? host : '[' + host + ']') + ':' +
-                                   std::to_string(ep.port());
+                    setup_->host_header = (std::string::npos == host.find(':') ? host : '[' + host + ']') + ':' +
+                                          std::to_string(ep.port());
                     stream_.next_layer().set_verify_callback(ssl::host_name_verification(host));
                     stream_.next_layer().async_handshake(
                         ssl::stream_base::client,
@@ -342,7 +348,7 @@ namespace nom
                             for (const auto& header : parent_->params_.headers)
                                 req.set(header.name, header.value);
                         }));
-                    stream_.async_handshake(host_header_,
+                    stream_.async_handshake(setup_->host_header,
                                             parent_->url_.target(),
                                             beast::bind_front_handler(&session::on_handshake, shared_from_this()));
                 }
@@ -766,9 +772,8 @@ namespace nom
         web_socket* parent_;
         delegate delegate_;
         std::string id_;
-        tcp::resolver resolver_;
+        std::unique_ptr<setup_state> setup_;
         websocket::stream<beast::ssl_stream<beast::tcp_stream>> stream_;
-        std::string host_header_;
         beast::flat_buffer buffer_;
         network_timestamp last_recv_ts_{};
         net::steady_timer idle_timer_;

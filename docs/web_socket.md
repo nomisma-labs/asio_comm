@@ -89,8 +89,9 @@ stateDiagram-v2
 - `close()`, called by **[close]**, replacement **[connect]**, or **[destroy]**, is a no-op in
   `init`. Otherwise it maps `connecting` to `conn_failed` and `connected`/`disconnecting` to
   `disconnected`, and preserves an existing
-  terminal status. It then independently disables Beast handshake/close timeouts and attempts TCP close and
-  resolver/timer cancellation.
+  terminal status. Selecting `conn_failed` releases setup storage and cancels pending resolution.
+  It then independently disables Beast handshake/close timeouts and attempts TCP close and
+  timer cancellation.
   Cleanup exceptions are suppressed; no event is delivered. The wrapper retains its session
   and identity after close, until reconnect or destruction.
 - `parent_` retains the holder's address in every state. The wrapper may still own a terminal
@@ -103,6 +104,11 @@ stateDiagram-v2
   selects it; further connection completions do nothing, `send()` rejects writes, and repeated
   `close()` preserves it. Reconnect replaces the session rather than resetting that terminal state.
   Complete transport cleanup remains a separate concern.
+- The resolver and HTTP Host-header string belong to a uniquely owned setup object. It is
+  allocated inside `connect()` after entering `connecting` and released when status becomes
+  `connected` or `conn_failed`, before notification. Terminal completion guards run before accessing setup storage, so
+  canceled operations can finish after it is released. An unused `init` session has no setup
+  allocation; reconnect starts with fresh setup storage.
 - `shutdown()` is an internal helper that requires connected status. Any other status is
   a precondition violation: assert, or log and return when assertions are disabled. Pending attempts are
   cancelled through `close()`. Every transition to `conn_failed` or `disconnected` uses
@@ -148,16 +154,18 @@ with success if already queued.
   The wrapper does not inspect the old session's state after close. Read the owner's `ws_params`
   through `parent_`; parameters, including headers, persist across reconnects and are not copied
   into the session.
-  The session's `connect()` dispatches through `switch (status_)`: `init` enters `connecting`
-  and starts DNS resolution; other states log an error and do nothing. Terminal sessions are
-  never reused. If DNS initiation throws, the session becomes `conn_failed` and the original
-  exception propagates to the caller; no delegate event is emitted. If replacing the delegate
+  The session's `connect()` dispatches through `switch (status_)`: `init` enters `connecting`,
+  allocates setup storage, and starts DNS resolution; other states log an error and do nothing.
+  Terminal sessions are never reused. If setup allocation or DNS initiation throws, the session
+  becomes `conn_failed` and the original exception propagates to the caller; no delegate event
+  is emitted. If replacing the delegate
   or allocating the next session throws, the existing session remains installed with its
   current status. Construction of the wrapper itself now includes allocation and construction
-  of the first session and its resolver, TLS/WebSocket stream, and timers.
+  of the first session, TLS/WebSocket stream, and timers.
 - **`[close]`** — `web_socket::close() noexcept`: no-op in `init`; otherwise select
   or preserve the appropriate terminal state, then independently disable Beast handshake/close
-  timeouts and attempt TCP close, resolver cancellation and cancellation of each application timer. Cleanup exceptions are suppressed without
+  timeouts and attempt TCP close and cancellation of each application timer. Setup destruction
+  cancels resolution while aborting a connection attempt. Cleanup exceptions are suppressed without
   logging or delegate calls; a failed cancellation may leave an operation pending until it
   completes naturally. Its completion cannot notify the delegate. There is no final event or
   buffered-data flush. Repeated close preserves both the terminal status and session identity.
@@ -349,7 +357,8 @@ The existing tests cover:
 
 - URL/enum integration, eager initial session, retained identity/status after close, replacement,
   and close/destruction with queued completions either drained or discarded by context destruction.
-- Injected allocation failures during connection initiation and resolver cancellation.
+- Injected allocation failures during connection initiation, plus an allocation guard while
+  closing pending setup and suppressing its queued completion.
 - Local TLS send/echo, fragmented messages with interleaved ping/pong, server-pushed data,
   peer close, partial-frame EOF, close from a data callback, and certificate/hostname rejection.
 - Live headers/User-Agent settings, retained/reset parameters on reconnect, three successive

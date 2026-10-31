@@ -7,10 +7,10 @@ This report reviews the [interface](web_socket.cppm), [implementation](web_socke
 the [component contract](../../docs/web_socket.md), and the existing unit and integration
 test sources. It also revisits the issue review in the conversation; no separate issue-report
 file was found in the repository. Findings below come from source inspection and dependency
-documentation. No build, test run, or fault reproduction was performed for this report.
+documentation. Completed stages below include their build, test, and fault-reproduction evidence.
 
-Mechanical cleanup in WS-01 is complete. WS-02 is in progress on session ownership, states,
-and terminal cleanup; contract and TODO cleanup follows in WS-03. Behavior changes
+Mechanical cleanup in WS-01 and the state/lifetime work in WS-02 are complete.
+Contract and TODO cleanup follows in WS-03. Behavior changes
 include their own focused tests; building a general failure test framework is not a
 prerequisite for the cleanup.
 
@@ -122,6 +122,11 @@ pre-split version; only accesses to executor/TLS storage changed.
 Relevant code: [status TODO](web_socket.cppm), `session::close()`, the connection
 completion handlers, `on_control()`, `on_receive()`, and `on_shutdown()`.
 
+**Status — complete 2026-11-01:** all source TODOs in this stage are implemented or resolved;
+`WS-DETACH` is retired. `WS-SETUP-STORAGE` completes the stage. The next stage is WS-03.
+Timer-specific cleanup continues in WS-06, sending/reentrancy in WS-07, and broader exception
+guarantees in WS-08.
+
 **Progress — 2026-11-01:** `WS-EAGER-SESSION` is implemented. The wrapper constructs its first
 session eagerly, starts it on the first `connect()`, retains its status/identity on `close()`,
 and creates a fresh session for reconnect. Accessors and `send()` no longer check for a null
@@ -144,7 +149,7 @@ and exchange-feeder suites.
 `unique_ptr` replacement would invalidate the captured session/transport/buffers. Unique
 ownership is possible with a separate shared operation state or an explicit drain/retirement
 contract, but adds a lifetime mechanism that this API does not currently need. Each session
-still constructs its backend objects eagerly; no new lazy transport layer is introduced.
+constructs its transport and timers eagerly; setup-only resources are allocated in `connect()`.
 
 **Validation:** GCC 16 `complete` builds all applications and test clients; all seven tests
 pass, including installation and source/installed-package consumers. Clang 22 AddressSanitizer
@@ -157,11 +162,10 @@ and LeakSanitizer ran with the required sandbox access. Bootstrap setup could no
 metadata; direct CMake presets provided build/test validation. Formatting, SPDX headers, local
 links, TODO references, and diff checks pass.
 
-**Remaining lifecycle work:** terminal states suppress obsolete completions through their
-entry-state switches; resource cleanup remains a separate task. Peer-close/read-error paths
-cancel the idle timer but can leave a ping wait pending. Common transport/timer finalization,
-move/copy, and setup-storage decisions remain
-open; the completed terminal-state and TLS-ownership TODOs do not complete WS-02.
+**Later-stage lifecycle work:** terminal states suppress obsolete completions through their
+entry-state switches. Peer-close/read-error paths can leave a ping wait pending; review
+consistent idle/ping cleanup in WS-06. Connected-operation initiation failures and cleanup
+under exceptions belong to WS-08. These are separate from completed setup-storage cleanup.
 
 **Terminal-state review — 2026-11-01:** `WS-TERMINAL-FAILURE` is complete as a state-machine
 contract. `conn_failed` and `disconnected` both terminate their session; creating a replacement
@@ -215,31 +219,25 @@ references, and diff checks pass. Bootstrap setup still cannot write Git metadat
 used direct CMake presets, with localhost/LeakSanitizer access for the relevant tests.
 
 
-Implement this batch as four reviewable steps:
+Completed scope:
 
-1. Address `WS-EAGER-SESSION`: create an always-present session so wrapper operations can rely
-   on its presence. Define how terminal status and reconnect preserve that invariant;
-   transport resources may remain lazy. Review session creation together with `init` and
-   wrapper status visibility.
-2. Introduce `init` for a fresh session and rename `failed` to `conn_failed`. Update enum users,
-   logs, tests, and the state diagram. Treat this as an API change, not cosmetic renaming.
-3. Introduce one terminal-finalization policy shared by connection failure and disconnection.
-   Preserve the selected terminal status, suppress later notifications, cancel outstanding
-   work, and release transport resources when the protocol operation permits it.
-4. Apply the policy to every completion/error path and test event counts, status visibility,
-   cancellation, and reentrancy. Resolve the move/copy and setup-storage questions alongside
-   this lifecycle design, documenting the chosen contracts and testing any behavior changes.
-   TLS ownership is resolved by the decision below.
+1. Keep an always-present session, reuse `init` for the first connect, and replace terminal
+   sessions on reconnect while preserving their final status and identity.
+2. Use `init` and `conn_failed`, with one entry-state switch per stateful session operation.
+3. Centralize status transitions and setup-resource release. Suppress obsolete completions
+   and retain the parent address in every state.
+4. Implement moves, retain wrapper-owned TLS configuration, place delegates in sessions, and
+   validate cancellation, callback lifetime, failure paths, and setup-storage disposal.
 
-**Ownership and value-semantics decisions:** resolve these together with the session/lifetime
-contract in this stage. A documented decision can close a TODO without changing the API.
+**Ownership and value-semantics decisions:** resolved together with the session/lifetime
+contract in this stage.
 
-| TODO / question | Options and recommendation |
+| TODO / question | Decision |
 | --- | --- |
-| Enable move construction/assignment | **Draft implemented and tested; contract decision open.** The current implementation exchanges fields and both parent pointers through `swap_state()`, then calls `other.close()` on the former destination session. No session status is inspected during the swap. Move construction allocates a fresh source session to keep both wrappers nonempty. A simpler alternative uses direct member moves and permits an empty moved-from wrapper. The user is considering that contract before choosing the final design. |
+| Enable move construction/assignment | **Complete.** Exchange fields and both parent pointers through `swap_state()`, then call `other.close()` on the former destination session. Move construction prepares a fresh source session to keep both wrappers nonempty; allocation failure leaves the source unchanged. |
 | Enable copying | Keep disabled. Copying an active connection has no defined meaning. A separate configuration object can be copied if constructing similar clients is the actual requirement. |
-| Move the TLS context into the session | **Resolved: retain it in `io_state`.** Configure once per wrapper and reuse across connection attempts. Its heap address stays stable when `io_` is transferred. No per-session or thread-local context is introduced. Review wrapper move semantics separately under `WS-MOVE-COPY`. |
-| Dispose connection-only state | Measure resolver and handshake-storage retention first. If worthwhile, use a small optional connection-setup object and release it after the final handshake operation no longer needs it. Keep cancellation valid throughout setup. |
+| Move the TLS context into the session | **Resolved: retain it in `io_state`.** Configure once per wrapper and reuse across connection attempts. Its heap address stays stable when `io_` is transferred. Wrapper moves transfer the backend and session together. |
+| Dispose connection-only state | **Complete.** Store the resolver and HTTP Host-header string in a uniquely owned setup object. Release it on transition to `connected` or `conn_failed`, before notifying the delegate. |
 
 **TLS ownership decision — completed 2026-11-01:** `WS-TLS-OWNERSHIP` is done. Retain the
 TLS context in `io_state`, configure it once per wrapper, and reuse it across connection
@@ -254,13 +252,10 @@ and trust configuration is initialized by the wrapper constructor.
 
 The context already has a stable heap address, so transferring `io_` does not itself move the
 TLS context object. Moving the TLS context into each session is therefore not a prerequisite
-for wrapper move support. The remaining move work belongs to `WS-MOVE-COPY`: active sessions
-still hold `parent_` pointing to the wrapper, and move assignment and the moved-from wrapper
-need explicit contracts that preserve safe cancellation and the always-present-session rule.
-The remaining tagged WS-02 TODOs are `WS-MOVE-COPY` and `WS-SETUP-STORAGE`.
+for wrapper move support. `WS-MOVE-COPY` updates each session's `parent_` when transferring
+holders, preserving safe cancellation and the always-present-session rule.
 
-**Move-support draft — 2026-11-01:** `WS-MOVE-COPY` remains open pending the moved-from
-contract. Custom move operations and regression tests are in the working tree. The current
+**Move support — completed 2026-11-01:** `WS-MOVE-COPY` is complete. The
 move constructor prepares a fresh `init` session for the source, then transfers the existing
 state; allocation failure leaves the source unchanged. Move assignment exchanges fields and
 session parent pointers first, then calls `other.close()` on the destination's former session.
@@ -276,12 +271,7 @@ friend of `session`. Tests include assignment over
 an already terminal destination, construction from a terminal session followed by immediate
 source reuse, and assignment of a terminal session over a pending attempt.
 
-The remaining design decision concerns move construction allocating a replacement backend.
-Direct member moves could avoid that allocation but require an explicitly empty moved-from
-state, supporting at least close, destruction, and reassignment. The user is considering
-that choice; `WS-MOVE-COPY` remains open until the contract is selected.
-
-The GCC 16 `complete` build and all seven tests pass for the current draft. Clang 22
+The GCC 16 `complete` build and all seven tests pass for move support. Clang 22
 AddressSanitizer builds and the unit, local TLS loopback, and exchange-feeder suites pass.
 Coverage includes unused/terminal moves, setup with queued completions, independent execution
 contexts, self-move, failure to allocate a source replacement, and all four TLS fixture modes:
@@ -299,15 +289,45 @@ session's delegate and captures until completion or destruction, while terminal-
 suppress obsolete notifications. Tests cover callback replacement during setup, borrowed
 callbacks on reconnect, callback-capture lifetime, and callback routing after moves.
 
+**Setup storage — completed 2026-11-01:** `WS-SETUP-STORAGE` is complete. `connect()` allocates
+a `setup_state` containing the resolver and HTTP Host-header string after entering `connecting`,
+inside the `try` block. Allocation failure selects `conn_failed` and propagates the original
+exception; no event is emitted. The object remains available throughout connection setup.
+`set_status<ws_status::connected>()` and
+`set_status<ws_status::conn_failed>()` release it before any notification or further error construction.
+The established session retains its stream, receive buffer, timers, identity, and delegate.
+
+Destroying the setup object's resolver cancels outstanding resolution. `close()` first selects
+`conn_failed`, so canceled or already queued resolve completions stop at the terminal-state
+guard. TCP/TLS/upgrade completions likewise ignore a failed attempt before accessing setup
+storage. The Host header remains available until the handshake completes, fails, or is
+canceled. Reconnect constructs a fresh session and allocates setup when starting its attempt;
+moves transfer the existing session and its current setup ownership together.
+
+On the GCC 16 x86-64 build with Boost 1.90, the resolver occupies 80 bytes and `std::string` occupies
+32 bytes. The setup object is 112 bytes; after it is released, the session retains only its
+8-byte `unique_ptr` holder. Its heap storage, resolver cancellation state, and any allocated
+Host-header capacity are released. Each started connection attempt adds one temporary setup
+allocation. An unused `init` session has no setup allocation, including a move source's fresh replacement.
+
+The allocation-guard test now verifies that closing pending setup neither allocates a new
+resolver cancellation token nor delivers stale events. Existing loopback coverage exercises
+successful connection, TLS rejection, handshake setup exceptions, rejected upgrades,
+reconnect, and moves during setup/after connection. The fresh GCC `complete` build and all
+seven tests pass. Clang ASan builds and all three selected suites (unit, TLS loopback, and
+exchange feeders) pass. Formatting, SPDX headers, Python checks, local links, and diff checks
+pass. Bootstrap cannot write Git metadata in this sandbox; direct CMake presets supplied
+the fresh build and test validation.
+
 **Public initial state:** implemented as `init` on the eager session. The wrapper reports that
 state until its first attempt, including after repeated `close()` before connection setup.
 
 **Parent lifetime:** explicit close retains `session::parent_` and the wrapper's `session_`,
 preserving status and identity. Reconnect replaces the session; old completions retain the
 old session and stop at their terminal-state guards. After owner destruction the retained parent address
-may dangle, so terminal handlers must not dereference it. Transport/timer finalization still
-needs a common policy, preserving `conn_failed` for attempts that never connected and
-`disconnected` after connection. Connection-stage guards accept `connecting` or `conn_failed`.
+may dangle, so terminal handlers must not dereference it. Timer finalization continues in
+WS-06, preserving `conn_failed` for attempts that never connected and `disconnected` after
+connection. Connection-stage guards accept `connecting` or `conn_failed`.
 
 **Callback lifetime:** pending handlers retain their session's callback storage throughout
 invocation; reconnect constructs independent storage in the replacement. `update_delegate()`
@@ -450,6 +470,10 @@ batch 7. Slow fragmented receives also feed the liveness tests in batch 6.
 - [`WS-CABLE-LOSS`](web_socket.cppm) — Reproduce hard disconnection (unplug the network cable).
 - [`WS-INTERFACE-LOSS`](web_socket.cppm) — Reproduce Docker-based interface disconnection (a soft disconnection of a virtual interface may only be caught by the idle timer).
 - [`WS-PEER-CLOSE`](web_socket.cppm) — Reproduce normal server disconnection (e.g. Binance resets the MD connection once per day).
+
+**Lifecycle follow-up from WS-02 (no separate source TODO):** make idle/ping cancellation
+consistent across peer close, read errors, explicit close, and graceful-close completion.
+In particular, peer-close/read-error paths can leave a ping wait pending until it expires.
 
 **WIP:** application connection deadlines have been removed from all examples, including the
 WebSocket example's overall response timer that also covered connection setup. An overall
@@ -595,7 +619,7 @@ contract violations, but that still does not justify swallowing unrelated alloca
 **Completion check:** extend the existing allocation-failure tests to connected read/timer/ping
 and close initiation, and async sends if introduced. Verify terminal state, cleanup, event
 cardinality, and whether `io_context::run()` propagates under the selected contract. Existing
-`close() noexcept` cancellation-failure coverage must continue to pass.
+`close() noexcept` allocation-guard and queued-completion coverage must continue to pass.
 
 <a id="ws-09"></a>
 
@@ -656,9 +680,9 @@ Markdown/link and diff review.
 | [`WS-MOVE-COPY`](web_socket.cpp) | Consider enabling move/copy construction and assignment for web_socket (why are they disabled?). | [WS-02](#ws-02) |
 | [`WS-TLS-OWNERSHIP`](web_socket.cpp) | Review why the TLS context is at the web_socket level (could it move to session?). | [WS-02](#ws-02) |
 
-Batch 1, including the direct-header module boundary, is complete. Batch 2 is in progress:
-eager session creation, `init`, and `conn_failed` naming are implemented. Continue with common
-transport/timer cleanup and the ownership/callback decisions; terminal states are implemented,
-and `WS-DETACH` is retired in favor of retained parent links. The remaining contract/TODO audit follows in batch 3.
+Batches 1 and 2 are complete, including the direct-header module boundary, state/lifetime
+contracts, moves, TLS ownership, session-owned delegates, and setup-storage disposal.
+`WS-DETACH` is retired in favor of retained parent links. Continue with the contract/TODO audit
+in batch 3; timer cleanup and broader exception guarantees remain in batches 6 and 8.
 Coordinate the timer/clock redesign in batch 6 with the shared execution proposal in
 [current_work.md](current_work.md).
