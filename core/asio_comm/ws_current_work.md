@@ -9,15 +9,16 @@ test sources. It also revisits the issue review in the conversation; no separate
 file was found in the repository. Findings below come from source inspection and dependency
 documentation. No build, test run, or fault reproduction was performed for this report.
 
-The order deliberately starts with cleaning. Batches 1–2 can be completed before changing
-runtime behavior. Later batches include their own focused tests; building a general failure
-test framework is not a prerequisite for the cleanup.
+Mechanical cleanup in WS-01 is complete. WS-02 now addresses session ownership, states,
+and terminal cleanup next; contract and TODO cleanup follows in WS-03. Behavior changes
+include their own focused tests; building a general failure test framework is not a
+prerequisite for the cleanup.
 
 | Stage ID | Batch | Complexity | Result |
 | --- | --- | --- | --- |
 | [WS-01](#ws-01) | Mechanical source cleanup and public-export audit | Small | Consistent code and justified public names |
-| [WS-02](#ws-02) | Contract and TODO cleanup | Small | Accurate explanations and explicit open decisions |
-| [WS-03](#ws-03) | State names, lifetime, and terminal cleanup | Medium–high; split into small steps | Predictable status and ownership transitions |
+| [WS-02](#ws-02) | State names, lifetime, and terminal cleanup | Medium–high; split into small steps | Predictable status and ownership transitions |
+| [WS-03](#ws-03) | Contract and TODO cleanup | Small | Accurate explanations and explicit open decisions |
 | [WS-04](#ws-04) | Parameter validation and update rules | Medium | Settings with defined values and application times |
 | [WS-05](#ws-05) | Large messages and payload limits | Medium | Verified snapshot handling and bounded message size |
 | [WS-06](#ws-06) | Heartbeats, deadlines, and connection-loss detection | Medium–high | Defined liveness behavior with reproducible tests |
@@ -34,7 +35,7 @@ mean it is completed. Findings without a source TODO are identified explicitly.
 
 Complexity describes implementation and validation effort, not severity. Blocking writes
 are a significant issue even though their redesign comes after the requested cleaning work.
-Batch 8 uses the common cleanup from batch 3; exception handling for newly changed paths
+Batch 8 uses the common cleanup from batch 2; exception handling for newly changed paths
 belongs in those changes immediately rather than waiting for the final exception audit.
 
 <a id="ws-01"></a>
@@ -105,52 +106,13 @@ pre-split version; only accesses to executor/TLS storage changed.
 
 <a id="ws-02"></a>
 
-**WS-02. Contract and TODO cleanup**
+**WS-02. State names, lifetime, and terminal cleanup**
 
 **Source TODOs covered:**
 
-- [`WS-PARAMS`](web_socket.cppm) — Review parameter contracts and validation.
-- [`WS-PING`](web_socket.cppm) — Understand different types of pings and why we need enable_outbound_ping.
-- [`WS-IDLE`](web_socket.cppm) — Review the idle timer and test it properly (perhaps with a local WebSocket server).
-- [`WS-OP-TIMEOUT`](web_socket.cppm) — Review async operation timeouts; reproduce a case when a timeout is triggered.
-- [`WS-LARGE-MESSAGES`](web_socket.cppm) — Test sending and receiving really big messages (e.g. a huge Coinbase initial snapshot); distinguish socket buffers from message limits.
 - [`WS-EAGER-SESSION`](web_socket.cpp) — Always create a session so web_socket::send (and others) need not check for a valid session_ pointer.
-- [`WS-MOVE-COPY`](web_socket.cpp) — Consider enabling move/copy construction and assignment for web_socket (why are they disabled?).
 - [`WS-TLS-OWNERSHIP`](web_socket.cpp) — Review why the TLS context is at the web_socket level (could it move to session?).
-
-This is a documentation change that turns broad questions into independently actionable work.
-
-- Correct the large-message TODO: socket receive-buffer capacity, assembled-message storage,
-  and maximum accepted WebSocket message size are different limits. Do not diagnose the
-  reported exchange snapshot problem as a 64 KiB limit without a failing payload or trace.
-- Explain the existing timeout precisely: one deadline starts before TCP connect and remains
-  active through TLS; DNS is outside it. WebSocket handshake and close use Beast's defaults.
-- Explain that outbound ping is optional, automatic replies to peer pings are separate,
-  and the idle timer currently runs regardless of the outbound-ping flag.
-- Record that parameters are read at different times. Editing the struct does not immediately
-  reconfigure the stream or start/stop timers.
-- State that `close()` aborts and suppresses events, while the private `shutdown()` requests
-  a graceful WebSocket close. Similar names currently obscure different contracts.
-- Resolve the documentation contradiction about reconnecting inside a delegate: the current
-  implementation replaces that delegate. Until callback lifetime is addressed, document
-  reconnect/delegate replacement after the active callback returns.
-- Keep design questions marked as decisions. Eager session creation, moving the wrapper,
-  moving the TLS context, and hiding Boost are not established bug fixes.
-
-The repeated `expires_never()` in `on_handshake()` is a candidate for a separate small
-simplification: the TCP deadline was already disabled in `on_ssl_handshake()`. Verify that
-no path re-enables it before removing the call and its exception-reporting branch. This is
-not just whitespace cleanup, because it removes a setup/error path.
-
-**Completion check:** source and docs agree; every TODO maps to a batch below; existing
-constraints remain visible. Use local links and symbol names so the report survives line shifts.
-
-<a id="ws-03"></a>
-
-**WS-03. State names, lifetime, and terminal cleanup**
-
-**Source TODOs covered:**
-
+- [`WS-MOVE-COPY`](web_socket.cpp) — Consider enabling move/copy construction and assignment for web_socket (why are they disabled?).
 - [`WS-INIT`](web_socket.cppm) — Introduce init (a session should start in init, not in disconnected).
 - [`WS-FAILURE-NAME`](web_socket.cppm) — Rename failed to conn_failed.
 - [`WS-TERMINAL-FAILURE`](web_socket.cppm) — Make conn_failed terminal, on the same level as disconnected.
@@ -166,15 +128,29 @@ replacement. Peer-close/read-error paths cancel the idle timer but can leave a p
 pending, keeping executor work alive until it expires. These are cleanup gaps, not evidence
 of an inevitable use-after-free: existing status guards suppress later delegate calls.
 
-Implement this batch as three reviewable steps:
+Implement this batch as four reviewable steps:
 
-1. Introduce `init` for a fresh session and rename `failed` to `conn_failed`. Update enum users,
+1. Address `WS-EAGER-SESSION`: create an always-present session so wrapper operations can rely
+   on its presence. Define how terminal detachment and reconnect preserve that invariant;
+   transport resources may remain lazy. Review session creation together with `init` and
+   wrapper status visibility.
+2. Introduce `init` for a fresh session and rename `failed` to `conn_failed`. Update enum users,
    logs, tests, and the state diagram. Treat this as an API change, not cosmetic renaming.
-2. Introduce one terminal-finalization policy shared by connection failure and disconnection.
+3. Introduce one terminal-finalization policy shared by connection failure and disconnection.
    Preserve the selected terminal status, detach notification ownership, cancel outstanding
    work, and release transport resources when the protocol operation permits it.
-3. Apply the policy to every completion/error path and test event counts, status visibility,
-   cancellation, and reentrancy.
+4. Apply the policy to every completion/error path and test event counts, status visibility,
+   cancellation, and reentrancy. Resolve the move/copy and TLS-ownership questions alongside
+   this lifecycle design, documenting the chosen contracts and testing any behavior changes.
+
+**Ownership and value-semantics decisions:** resolve these together with the session/lifetime
+contract in this stage. A documented decision can close a TODO without changing the API.
+
+| TODO / question | Options and recommendation |
+| --- | --- |
+| Enable move construction/assignment | Keep a stable wrapper address, or explicitly rebind the active session's raw `parent_` and define pending-callback/move-assignment behavior. Keep moves disabled until a caller needs them. Defaulted move is not safe for this ownership model; the TLS context's move behavior is not the only concern. |
+| Enable copying | Keep disabled. Copying an active connection has no defined meaning. A separate configuration object can be copied if constructing similar clients is the actual requirement. |
+| Move the TLS context into the session | Ownership in the wrapper's `io_state` reuses trust configuration across attempts; session ownership gives each attempt its own context; shared immutable TLS configuration is another option if many clients need it. Keep the current placement until ownership, configuration, or measured cost favors a change. No context-lifetime defect was established here. |
 
 **Public `init` options:** keep the wrapper reporting `disconnected` when it has no session,
 or expose `init` before its first connection. The latter is clearer if callers need to
@@ -208,6 +184,44 @@ drain queued completions; disconnect with a ping wait outstanding; exercise call
 close and the selected reconnect policy. Verify one terminal event where promised, none after
 explicit abort, preserved failure status, and no new work from an obsolete session. Extend the
 existing loopback server only as needed for these cases.
+
+<a id="ws-03"></a>
+
+**WS-03. Contract and TODO cleanup**
+
+**Source TODOs covered:**
+
+- [`WS-PARAMS`](web_socket.cppm) — Review parameter contracts and validation.
+- [`WS-PING`](web_socket.cppm) — Understand different types of pings and why we need enable_outbound_ping.
+- [`WS-IDLE`](web_socket.cppm) — Review the idle timer and test it properly (perhaps with a local WebSocket server).
+- [`WS-OP-TIMEOUT`](web_socket.cppm) — Review async operation timeouts; reproduce a case when a timeout is triggered.
+- [`WS-LARGE-MESSAGES`](web_socket.cppm) — Test sending and receiving really big messages (e.g. a huge Coinbase initial snapshot); distinguish socket buffers from message limits.
+
+This is a documentation change that turns broad questions into independently actionable work.
+
+- Correct the large-message TODO: socket receive-buffer capacity, assembled-message storage,
+  and maximum accepted WebSocket message size are different limits. Do not diagnose the
+  reported exchange snapshot problem as a 64 KiB limit without a failing payload or trace.
+- Explain the existing timeout precisely: one deadline starts before TCP connect and remains
+  active through TLS; DNS is outside it. WebSocket handshake and close use Beast's defaults.
+- Explain that outbound ping is optional, automatic replies to peer pings are separate,
+  and the idle timer currently runs regardless of the outbound-ping flag.
+- Record that parameters are read at different times. Editing the struct does not immediately
+  reconfigure the stream or start/stop timers.
+- State that `close()` aborts and suppresses events, while the private `shutdown()` requests
+  a graceful WebSocket close. Similar names currently obscure different contracts.
+- Resolve the documentation contradiction about reconnecting inside a delegate: the current
+  implementation replaces that delegate. Until callback lifetime is addressed, document
+  reconnect/delegate replacement after the active callback returns.
+- Keep design questions marked as decisions; hiding Boost is not an established bug fix.
+
+The repeated `expires_never()` in `on_handshake()` is a candidate for a separate small
+simplification: the TCP deadline was already disabled in `on_ssl_handshake()`. Verify that
+no path re-enables it before removing the call and its exception-reporting branch. This is
+not just whitespace cleanup, because it removes a setup/error path.
+
+**Completion check:** source and docs agree; every TODO maps to a batch below; existing
+constraints remain visible. Use local links and symbol names so the report survives line shifts.
 
 <a id="ws-04"></a>
 
@@ -353,7 +367,9 @@ blackhole detection. Simulate periodic server close locally rather than waiting 
 
 **WS-07. Sending and backpressure**
 
-**Source TODOs covered:** none; this stage addresses the blocking-write finding from the review.
+**Source TODOs covered:**
+
+- [`WS-SEND-REENTRY`](web_socket.cpp) — Try sending from inside the ws_data receiver handler to reproduce re-entry into send.
 
 Relevant code: `session::send()`, `on_ping_timer()`, the read loop, and `shutdown()`.
 
@@ -385,9 +401,12 @@ new sends after closing starts, and prevent a reconnect from sending old-session
 Preserve the existing serialized-executor requirement; adding a queue does not make calls
 from arbitrary threads safe.
 
-**Completion check:** slow/non-reading peer, sustained sends, queue saturation or busy rejection,
-ping/control traffic during writes, write failure, close/reconnect with pending data, ordered
-delivery, payload lifetime, and timer progress. Migrate all affected examples/feeders together.
+**Completion check:** send from a `ws_data` callback and verify the outcome while the read
+loop and control traffic are active. Distinguish this callback-driven send from overlapping
+write operations; neither case is presumed safe or broken without validation. Also cover a
+slow/non-reading peer, sustained sends, queue saturation or busy rejection, ping/control traffic
+during writes, write failure, close/reconnect with pending data, ordered delivery, payload
+lifetime, and timer progress. Migrate all affected examples/feeders together.
 
 <a id="ws-08"></a>
 
@@ -429,9 +448,6 @@ cardinality, and whether `io_context::run()` propagates under the selected contr
 
 **Source TODOs covered:**
 
-- [`WS-EAGER-SESSION`](web_socket.cpp) — Always create a session so web_socket::send (and others) need not check for a valid session_ pointer.
-- [`WS-MOVE-COPY`](web_socket.cpp) — Consider enabling move/copy construction and assignment for web_socket (why are they disabled?).
-- [`WS-TLS-OWNERSHIP`](web_socket.cpp) — Review why the TLS context is at the web_socket level (could it move to session?).
 - [`WS-SETUP-STORAGE`](web_socket.cpp) — Dispose of state required only for connection setup after the connection is established (e.g. resolver).
 - [`WS-TRANSPORT-OPTIONS`](web_socket.cpp) — Test various connection options (different TLS levels, no SSL?).
 
@@ -440,16 +456,12 @@ merely because an alternative exists.
 
 | TODO / question | Options and recommendation |
 | --- | --- |
-| Always create a session | Keep lazy transport creation, or keep an always-present lightweight session with lazy transport resources. Prefer current lazy creation unless the new state model becomes materially simpler. Eliminating a few null checks alone is insufficient justification. |
-| Enable move construction/assignment | Keep a stable wrapper address, or explicitly rebind the active session's raw `parent_` and define pending-callback/move-assignment behavior. Keep moves disabled until a caller needs them. Defaulted move is not safe for this ownership model; the TLS context's move behavior is not the only concern. |
-| Enable copying | Keep disabled. Copying an active connection has no defined meaning. A separate configuration object can be copied if constructing similar clients is the actual requirement. |
-| Move the TLS context into the session | Ownership in the wrapper's `io_state` reuses trust configuration across attempts; session ownership gives each attempt its own context; shared immutable TLS configuration is another option if many clients need it. Keep the current placement until ownership, configuration, or measured cost favors a change. No context-lifetime defect was established here. |
 | Dispose connection-only state | Measure resolver and handshake-storage retention first. If worthwhile, use a small optional connection-setup object and release it after the final handshake operation no longer needs it. Keep cancellation valid throughout setup. |
 | Hide Boost behind Nomisma wrappers | Alternate communication backends and simulation now provide a concrete use case. Follow the engine/executor/timer and event-source proposal in [current_work.md](current_work.md). Direct Boost dependencies currently belong to application/test consumers; migrate those consumers to neutral contracts when the wrappers exist. Preserve module and installed-package coverage. |
 | Different TLS levels / no TLS | Test the intended supported TLS versions against the local server, retaining certificate and hostname verification. Treat plain `ws://` as a separate transport feature requiring a real consumer; it is not achieved by simply accepting another URL scheme. |
 
 Received text/binary type and structured peer close code/reason are additional API decisions
-not covered by the current TODOs. Preserve useful close diagnostics during batch 3; introduce
+not covered by the current TODOs. Preserve useful close diagnostics during batch 2; introduce
 public fields only when callers need them.
 
 **Coverage and execution notes**
@@ -470,27 +482,29 @@ Markdown/link and diff review.
 
 | Source TODO ID | Complete source TODO | Stages |
 | --- | --- | --- |
-| [`WS-PARAMS`](web_socket.cppm) | Review parameter contracts and validation. | [WS-02](#ws-02), [WS-04](#ws-04) |
-| [`WS-PING`](web_socket.cppm) | Understand different types of pings and why we need enable_outbound_ping. | [WS-02](#ws-02), [WS-06](#ws-06) |
-| [`WS-IDLE`](web_socket.cppm) | Review the idle timer and test it properly (perhaps with a local WebSocket server). | [WS-02](#ws-02), [WS-06](#ws-06) |
-| [`WS-OP-TIMEOUT`](web_socket.cppm) | Review async operation timeouts; reproduce a case when a timeout is triggered. | [WS-02](#ws-02), [WS-06](#ws-06) |
-| [`WS-LARGE-MESSAGES`](web_socket.cppm) | Test sending and receiving really big messages (e.g. a huge Coinbase initial snapshot); distinguish socket buffers from message limits. | [WS-02](#ws-02), [WS-05](#ws-05) |
-| [`WS-INIT`](web_socket.cppm) | Introduce init (a session should start in init, not in disconnected). | [WS-03](#ws-03) |
-| [`WS-FAILURE-NAME`](web_socket.cppm) | Rename failed to conn_failed. | [WS-03](#ws-03) |
-| [`WS-TERMINAL-FAILURE`](web_socket.cppm) | Make conn_failed terminal, on the same level as disconnected. | [WS-03](#ws-03) |
-| [`WS-DETACH`](web_socket.cppm) | Any terminal state (disconnected, conn_failed) should also be detached from the parent. | [WS-03](#ws-03) |
+| [`WS-PARAMS`](web_socket.cppm) | Review parameter contracts and validation. | [WS-03](#ws-03), [WS-04](#ws-04) |
+| [`WS-PING`](web_socket.cppm) | Understand different types of pings and why we need enable_outbound_ping. | [WS-03](#ws-03), [WS-06](#ws-06) |
+| [`WS-IDLE`](web_socket.cppm) | Review the idle timer and test it properly (perhaps with a local WebSocket server). | [WS-03](#ws-03), [WS-06](#ws-06) |
+| [`WS-OP-TIMEOUT`](web_socket.cppm) | Review async operation timeouts; reproduce a case when a timeout is triggered. | [WS-03](#ws-03), [WS-06](#ws-06) |
+| [`WS-LARGE-MESSAGES`](web_socket.cppm) | Test sending and receiving really big messages (e.g. a huge Coinbase initial snapshot); distinguish socket buffers from message limits. | [WS-03](#ws-03), [WS-05](#ws-05) |
+| [`WS-INIT`](web_socket.cppm) | Introduce init (a session should start in init, not in disconnected). | [WS-02](#ws-02) |
+| [`WS-FAILURE-NAME`](web_socket.cppm) | Rename failed to conn_failed. | [WS-02](#ws-02) |
+| [`WS-TERMINAL-FAILURE`](web_socket.cppm) | Make conn_failed terminal, on the same level as disconnected. | [WS-02](#ws-02) |
+| [`WS-DETACH`](web_socket.cppm) | Any terminal state (disconnected, conn_failed) should also be detached from the parent. | [WS-02](#ws-02) |
 | [`WS-CABLE-LOSS`](web_socket.cppm) | Reproduce hard disconnection (unplug the network cable). | [WS-06](#ws-06) |
 | [`WS-INTERFACE-LOSS`](web_socket.cppm) | Reproduce Docker-based interface disconnection (a soft disconnection of a virtual interface may only be caught by the idle timer). | [WS-06](#ws-06) |
 | [`WS-PEER-CLOSE`](web_socket.cppm) | Reproduce normal server disconnection (e.g. Binance resets the MD connection once per day). | [WS-06](#ws-06) |
+| [`WS-SEND-REENTRY`](web_socket.cpp) | Try sending from inside the ws_data receiver handler to reproduce re-entry into send. | [WS-07](#ws-07) |
 | [`WS-EXCEPTIONS`](web_socket.cppm) | Consider making the interface noexcept for everything except the constructor. | [WS-08](#ws-08) |
 | [`WS-CONNECT-DEADLINE`](web_socket.cpp) | Make the connection procedure time-bound (we can use default_async_operation_timeout_sec for it). | [WS-06](#ws-06) |
 | [`WS-SETUP-STORAGE`](web_socket.cpp) | Dispose of state required only for connection setup after the connection is established (e.g. resolver). | [WS-09](#ws-09) |
 | [`WS-TRANSPORT-OPTIONS`](web_socket.cpp) | Test various connection options (different TLS levels, no SSL?). | [WS-09](#ws-09) |
-| [`WS-EAGER-SESSION`](web_socket.cpp) | Always create a session so web_socket::send (and others) need not check for a valid session_ pointer. | [WS-02](#ws-02), [WS-09](#ws-09) |
-| [`WS-MOVE-COPY`](web_socket.cpp) | Consider enabling move/copy construction and assignment for web_socket (why are they disabled?). | [WS-02](#ws-02), [WS-09](#ws-09) |
-| [`WS-TLS-OWNERSHIP`](web_socket.cpp) | Review why the TLS context is at the web_socket level (could it move to session?). | [WS-02](#ws-02), [WS-09](#ws-09) |
+| [`WS-EAGER-SESSION`](web_socket.cpp) | Always create a session so web_socket::send (and others) need not check for a valid session_ pointer. | [WS-02](#ws-02) |
+| [`WS-MOVE-COPY`](web_socket.cpp) | Consider enabling move/copy construction and assignment for web_socket (why are they disabled?). | [WS-02](#ws-02) |
+| [`WS-TLS-OWNERSHIP`](web_socket.cpp) | Review why the TLS context is at the web_socket level (could it move to session?). | [WS-02](#ws-02) |
 
 Batch 1, including the direct-header module boundary, is complete. Batch 2 is the next proposed change.
-Select the public-state and callback contracts before batch 3.
+Start batch 2 with session creation and the public-state/callback contracts; update the affected
+contract documentation alongside the implementation. The remaining contract/TODO audit follows in batch 3.
 Coordinate the timer/clock redesign in batch 6 with the shared execution proposal in
 [current_work.md](current_work.md).

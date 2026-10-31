@@ -65,14 +65,14 @@ export namespace nom
         };
 
         // TODO IDs and stage definitions: ws_current_work.md.
-        // TODO[WS-PARAMS] (stages WS-02, WS-04): Review parameter contracts and validation.
-        // TODO[WS-PING] (stages WS-02, WS-06): Understand different types of pings and why we need
+        // TODO[WS-PARAMS] (stages WS-03, WS-04): Review parameter contracts and validation.
+        // TODO[WS-PING] (stages WS-03, WS-06): Understand different types of pings and why we need
         // enable_outbound_ping.
-        // TODO[WS-IDLE] (stages WS-02, WS-06): Review the idle timer and test it properly
+        // TODO[WS-IDLE] (stages WS-03, WS-06): Review the idle timer and test it properly
         // (perhaps with a local WebSocket server).
-        // TODO[WS-OP-TIMEOUT] (stages WS-02, WS-06): Review async operation timeouts;
+        // TODO[WS-OP-TIMEOUT] (stages WS-03, WS-06): Review async operation timeouts;
         // reproduce a case when a timeout is triggered.
-        // TODO[WS-LARGE-MESSAGES] (stages WS-02, WS-05): Test sending and receiving really big messages
+        // TODO[WS-LARGE-MESSAGES] (stages WS-03, WS-05): Test sending and receiving really big messages
         // (e.g. a huge Coinbase initial snapshot); distinguish socket buffers from message limits.
 
         std::vector<header> headers{};
@@ -94,10 +94,10 @@ export namespace nom
         };
     } // namespace detail
 
-    // TODO[WS-INIT] (stage WS-03): Introduce init (a session should start in init, not in disconnected).
-    // TODO[WS-FAILURE-NAME] (stage WS-03): Rename failed to conn_failed.
-    // TODO[WS-TERMINAL-FAILURE] (stage WS-03): Make conn_failed terminal, on the same level as disconnected.
-    // TODO[WS-DETACH] (stage WS-03): Any terminal state (disconnected, conn_failed) should also be
+    // TODO[WS-INIT] (stage WS-02): Introduce init (a session should start in init, not in disconnected).
+    // TODO[WS-FAILURE-NAME] (stage WS-02): Rename failed to conn_failed.
+    // TODO[WS-TERMINAL-FAILURE] (stage WS-02): Make conn_failed terminal, on the same level as disconnected.
+    // TODO[WS-DETACH] (stage WS-02): Any terminal state (disconnected, conn_failed) should also be
     // detached from the parent.
     NOM_ENUM(ws_status, std::uint8_t, disconnected, connecting, connected, disconnecting, failed)
 

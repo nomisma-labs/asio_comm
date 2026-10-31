@@ -658,6 +658,8 @@ namespace nom
         }
 
     public:
+        // TODO[WS-SEND-REENTRY] (stage WS-07): Try sending from inside the ws_data receiver handler
+        // to reproduce re-entry into send.
         bool send(const std::string& text)
         {
             switch (status_)
@@ -746,11 +748,11 @@ namespace nom
         net::steady_timer ping_timer_;
     };
 
-    // TODO[WS-EAGER-SESSION] (stages WS-02, WS-09): Always create a session so web_socket::send
+    // TODO[WS-EAGER-SESSION] (stage WS-02): Always create a session so web_socket::send
     // (and others) need not check for a valid session_ pointer.
-    // TODO[WS-MOVE-COPY] (stages WS-02, WS-09): Consider enabling move/copy construction and assignment
+    // TODO[WS-MOVE-COPY] (stage WS-02): Consider enabling move/copy construction and assignment
     // for web_socket (why are they disabled?).
-    // TODO[WS-TLS-OWNERSHIP] (stages WS-02, WS-09): Review why the TLS context is at the web_socket level
+    // TODO[WS-TLS-OWNERSHIP] (stage WS-02): Review why the TLS context is at the web_socket level
     // (could it move to session?).
     web_socket::web_socket(net::any_io_executor executor, const ::nom::url& address)
         : io_(std::make_unique<io_state>(std::move(executor))), url_(address)
