@@ -376,7 +376,8 @@ These are outputs of the current machine, shown as actions on edges:
 - **Blocking writes.** `send()` blocks the executor, so a timer on that executor cannot interrupt
   it. Queued sends and backpressure are outside the current API. Interaction with pending ping
   or automatic control-frame writes still needs review: serialized handlers alone do not
-  prevent asynchronous operations from overlapping.
+  prevent asynchronous operations from overlapping. The planned send reproduction, conditional
+  buffering, and coordination work is in [WS-03](../core/asio_comm/ws_current_work.md#ws-03).
 - **Liveness.** The idle timer runs even with outbound pings disabled and can close a healthy
   but quiet connection. Idle detection remains owned by this client; Beast's idle timeout and
   automatic idle pings stay disabled. The activity definition, deadline scheduling, and timer

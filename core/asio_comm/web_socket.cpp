@@ -825,7 +825,7 @@ namespace nom
         }
 
     public:
-        // TODO[WS-SEND-REENTRY] (stage WS-07): Try sending from inside the ws_data receiver handler
+        // TODO[WS-SEND-REENTRY] (stage WS-03): Try sending from inside the ws_data receiver handler
         // to reproduce re-entry into send.
         bool send(const std::string& text)
         {
