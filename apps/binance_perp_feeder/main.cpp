@@ -135,7 +135,9 @@ namespace
               client_(nom::ctx(this).io.get_executor(), nom::url(config.endpoint))
         {
             // Periodic client pings keep receive activity tracked on quiet subscriptions.
-            client_.params().enable_outbound_ping = true;
+            auto params = client_.params();
+            params.enable_outbound_ping = true;
+            client_.update_params(params);
         }
 
         void on_request(nom::event::service_command command)

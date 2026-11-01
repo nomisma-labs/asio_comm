@@ -148,8 +148,10 @@ TEST_CASE("Move construction transfers an unused session and leaves a usable sou
     nom::init_logger(nom::main_logger);
     boost::asio::io_context io;
     nom::web_socket source(io.get_executor(), nom::url("wss://127.0.0.1:1/source"));
-    source.params().agent_name = "move-test";
-    source.params().headers = {{.name = "X-Move", .value = "preserved"}};
+    auto params = source.params();
+    params.agent_name = "move-test";
+    params.headers = {{.name = "X-Move", .value = "preserved"}};
+    source.update_params(params);
     const auto original_id = source.session_id();
 
     nom::web_socket destination(std::move(source));

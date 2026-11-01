@@ -46,23 +46,28 @@ The component constructor always uses the `wss` scheme and validates the compone
 
 ### Parameters and headers
 
-Configure the client through `params()`, which returns its `nom::ws_params`. Headers are
+Configure the client through `update_params()`. `params()` returns a read-only view of its
+`nom::ws_params`. Headers are
 `nom::ws_params::header` entries with owning `name` and `value` strings:
 
 ```cpp
 nom::web_socket client(io.get_executor(), nom::url("wss://feed.example/stream"));
-client.params().headers = {{.name = "Authorization", .value = "Bearer " + token}};
-client.params().agent_name = "my-feed-client/1.0";
-client.params().enable_outbound_ping = true;
+auto params = client.params();
+params.headers = {{.name = "Authorization", .value = "Bearer " + token}};
+params.agent_name = "my-feed-client/1.0";
+params.enable_outbound_ping = true;
+client.update_params(params);
 client.connect(callbacks);
 ```
 
 `callbacks` is a `nom::web_socket::delegate` receiving `nom::event::on_connected`,
 `nom::event::ws_data`, `nom::event::on_disconnected`, and `nom::event::network_error`.
-The session reads settings directly from the owning client's parameters when needed; it does
-not take a snapshot. Serialize parameter edits with client calls and completion handlers.
-Settings persist across reconnects. Clear `params().headers` to remove custom headers, or
-assign `params() = {}` to restore all defaults.
+`ws_params::validate()` returns `std::expected<void, std::string>` with the first invalid field's
+diagnostic. `update_params()` performs the same validation and throws `std::invalid_argument`
+for invalid values. Valid updates are allowed only in `init`, `conn_failed`, or `disconnected`;
+active-session updates throw `std::logic_error`. Rejected updates preserve the installed settings.
+Serialize updates with client calls and completion handlers. Settings persist across reconnects;
+`update_params({})` restores defaults while inactive.
 
 | Parameter | Default | Used for |
 | --- | --- | --- |
@@ -73,9 +78,11 @@ assign `params() = {}` to restore all defaults.
 | `ping_interval_sec` | `20` | Delay from handshake or ping-send completion to the next ping; derived idle timer interval/idle threshold |
 | `socket_send_buf_size`, `socket_recv_buf_size` | `65536` bytes each | Socket options applied after TCP connect |
 
-Changes take effect when the corresponding setting is next read. They do not reschedule pending
-timers, reapply socket options, or alter an already-sent handshake. Changing the ping enable flag
-after handshake completion does not start or stop a timer. WebSocket handshake/close timeouts
+Accepted settings apply to the next connection attempt and remain fixed while it is active.
+Timeouts and ping intervals must be positive; buffer sizes must fit a positive `int`. HTTP
+fields must have valid syntax and supported lengths, with no duplicate names or overrides of
+managed handshake fields. An explicit `User-Agent` header may override `agent_name`.
+WebSocket handshake/close timeouts
 still use Beast's client defaults. Headers are not attached to subsequent data frames.
 
 The `disconnecting` status marks an internal graceful close: new sends are rejected and timer
@@ -89,7 +96,8 @@ usage constraints, deferred work and validation coverage.
 
 The integration suite uses a local TLS peer to test echo, fragmented messages with an
 interleaved ping, server-pushed data, peer close, incomplete input, certificate rejection,
-live headers/User-Agent settings, retained/reset parameters, and repeated configured outbound pings.
+validated headers/User-Agent settings, rejected active updates, retained/reset parameters,
+and repeated configured outbound pings.
 No public endpoint is needed for tests.
 
 See the [project overview](../../README.md) for repository dependencies and shared build instructions.

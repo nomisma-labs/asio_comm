@@ -27,6 +27,85 @@ namespace nom
     namespace websocket = beast::websocket;
     using tcp = boost::asio::ip::tcp;
 
+    namespace
+    {
+        bool is_header_name(std::string_view name) noexcept
+        {
+            return !name.empty() && std::ranges::all_of(name,
+                                                        [](unsigned char c)
+                                                        {
+                                                            return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                                                                   (c >= '0' && c <= '9') ||
+                                                                   std::string_view{"!#$%&'*+-.^_`|~"}.find(
+                                                                       static_cast<char>(c)) != std::string_view::npos;
+                                                        });
+        }
+
+        bool is_header_value(std::string_view value) noexcept
+        {
+            return std::ranges::all_of(value, [](unsigned char c) { return c == '\t' || (c >= 0x20 && c != 0x7f); });
+        }
+
+        bool is_handshake_header(std::string_view name) noexcept
+        {
+            switch (http::string_to_field({name.data(), name.size()}))
+            {
+            case http::field::host:
+            case http::field::connection:
+            case http::field::upgrade:
+            case http::field::sec_websocket_key:
+            case http::field::sec_websocket_version:
+            case http::field::sec_websocket_accept:
+            case http::field::sec_websocket_extensions:
+            case http::field::content_length:
+            case http::field::transfer_encoding:
+                return true;
+            default:
+                return false;
+            }
+        }
+    } // namespace
+
+    std::expected<void, std::string> ws_params::validate() const
+    {
+        if (async_operation_timeout_sec == 0)
+            return std::unexpected("/async_operation_timeout_sec must be positive");
+        // Idle detection uses this interval even when outbound pings are disabled.
+        if (ping_interval_sec == 0)
+            return std::unexpected("/ping_interval_sec must be positive");
+        constexpr auto max_buffer_size = static_cast<unsigned>(std::numeric_limits<int>::max());
+        if (socket_send_buf_size == 0 || socket_send_buf_size > max_buffer_size)
+            return std::unexpected("/socket_send_buf_size must be in [1, INT_MAX]");
+        if (socket_recv_buf_size == 0 || socket_recv_buf_size > max_buffer_size)
+            return std::unexpected("/socket_recv_buf_size must be in [1, INT_MAX]");
+        if (agent_name.find_first_not_of(" \t") == std::string::npos)
+            return std::unexpected("/agent_name must be nonempty");
+        if (agent_name.size() > http::fields::max_value_size)
+            return std::unexpected("/agent_name exceeds the supported HTTP field length");
+        if (!is_header_value(agent_name))
+            return std::unexpected("/agent_name contains an invalid HTTP field character");
+
+        for (std::size_t i = 0; i < headers.size(); ++i)
+        {
+            const auto& header = headers[i];
+            const auto path = "/headers/" + std::to_string(i);
+            if (!is_header_name(header.name))
+                return std::unexpected(path + "/name must be a nonempty HTTP token");
+            if (header.name.size() > http::fields::max_name_size)
+                return std::unexpected(path + "/name exceeds the supported HTTP field length");
+            if (is_handshake_header(header.name))
+                return std::unexpected(path + "/name is reserved for the WebSocket handshake");
+            if (header.value.size() > http::fields::max_value_size)
+                return std::unexpected(path + "/value exceeds the supported HTTP field length");
+            if (!is_header_value(header.value))
+                return std::unexpected(path + "/value contains an invalid HTTP field character");
+            for (std::size_t j = 0; j < i; ++j)
+                if (beast::iequals(header.name, headers[j].name))
+                    return std::unexpected(path + "/name duplicates an earlier header");
+        }
+        return {};
+    }
+
     struct web_socket::io_state
     {
         explicit io_state(net::any_io_executor executor) : executor(std::move(executor))
@@ -842,6 +921,27 @@ namespace nom
     const web_socket::delegate& web_socket::callbacks() const noexcept
     {
         return session_->callbacks();
+    }
+
+    void web_socket::update_params(const ws_params& params)
+    {
+        if (const auto result = params.validate(); !result)
+            throw std::invalid_argument(result.error());
+
+        switch (status())
+        {
+        case ws_status::init:
+        case ws_status::conn_failed:
+        case ws_status::disconnected:
+        {
+            static_assert(std::is_nothrow_swappable_v<ws_params>);
+            auto next = params;
+            std::swap(params_, next);
+            break;
+        }
+        default:
+            throw std::logic_error("Cannot update parameters while the WebSocket session is active");
+        }
     }
 
     void web_socket::connect(const delegate& callbacks)

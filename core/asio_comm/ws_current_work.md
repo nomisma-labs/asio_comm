@@ -9,8 +9,8 @@ test sources. It also revisits the issue review in the conversation; no separate
 file was found in the repository. Findings below come from source inspection and dependency
 documentation. Completed stages below include their build, test, and fault-reproduction evidence.
 
-Mechanical cleanup in WS-01 and the state/lifetime work in WS-02 are complete.
-Parameter validation and update rules in WS-04 are next. Each stage includes its contract
+WS-01, WS-02, and parameter validation/update rules in WS-04 are complete.
+Message sizes and payload limits in WS-05 are next. Each stage includes its contract
 documentation and focused tests; building a general failure test framework is not a
 prerequisite for the work.
 
@@ -91,7 +91,7 @@ unit, TLS loopback, and feeder suites passed. Coverage includes terminal-state b
 queued completions, moves, callback lifetime/reconnect, setup failures, and allocation guards.
 Bootstrap's Git setup was blocked by read-only metadata; validation used CMake presets directly.
 
-**Next:** [WS-04](#ws-04) for parameter validation and update rules. Timer cleanup and peer-close
+**Next:** [WS-05](#ws-05) for message sizes and payload limits; WS-04 is complete below. Timer cleanup and peer-close
 protocol handling continue in [WS-06](#ws-06), sending/reentrancy in [WS-07](#ws-07), and broader exception
 guarantees in [WS-08](#ws-08). Detailed behavior is in the [component contract](../../docs/web_socket.md).
 
@@ -103,33 +103,32 @@ guarantees in [WS-08](#ws-08). Detailed behavior is in the [component contract](
 
 - [`WS-PARAMS`](web_socket.cppm) — Review parameter contracts and validation.
 
-Relevant code: `ws_params`, `apply_socket_options()`, timer setup, and the handshake decorator.
+**Complete — 2026-11-01.** Mutable `params()` is replaced by `update_params(const ws_params&)`
+and a read-only getter. `ws_params::validate() const` returns `std::expected<void, std::string>`
+with the first invalid field's diagnostic; clients can validate independently before updating.
 
-Confirmed issues: zero `ping_interval_sec` creates immediate timer deadlines; with no tracked
-activity, repeated idle callbacks can run until the whole-second idle comparison trips.
-Socket buffer settings are unsigned but are passed to Asio options accepting `int`, with no
-range validation. Changing `enable_outbound_ping` after handshake does not start or stop the
-ping timer, although it changes whether received pongs count as activity.
+**Update policy 1:** the wrapper validates first, then accepts whole-object replacement only
+in `init`, `conn_failed`, or `disconnected`. Invalid values throw `std::invalid_argument`;
+valid updates during an active session throw `std::logic_error`. Copying before a nonthrowing
+swap preserves installed settings and session behavior on failure. The session has no
+parameter-update method. Settings remain fixed throughout an attempt and persist on reconnect.
 
-Choose the configuration contract before adding validation:
+Validation requires positive timeout/ping intervals and positive socket buffers representable
+as `int`. Ping intervals remain positive with outbound pings disabled because idle detection
+uses them. HTTP names/values and `agent_name` are checked for syntax and supported lengths;
+case-insensitive duplicates and managed handshake/framing overrides are rejected. Explicit
+`User-Agent` overrides remain supported. See the [component contract](../../docs/web_socket.md)
+for exact rules and reserved fields.
 
-- **Option A — retain live reads:** smallest compatibility change. Validate values whenever
-  consumed and document when each field applies. Existing tests intentionally exercise edits
-  after `connect()` and before the handshake.
-- **Option B — snapshot settings per connection:** simpler session reasoning and one initial
-  validation point, but changes tested behavior and copies headers/settings. Use this only as
-  an explicit API decision.
-- **Option C — explicit runtime setters:** suitable if live heartbeat reconfiguration is
-  required. Setters validate and rearm/cancel the affected operations; this adds public API.
+Applications, package consumers, and fixtures configure each attempt before connecting.
+Tests cover boundaries, invalid HTTP fields, reserved/duplicate names, all update states,
+strong failure guarantees, callback/move behavior, and on-wire settings across reconnects.
+The oversized-header fixture is now covered by synchronous parameter-validation tests;
+rejected upgrades and connection-initiation exceptions retain their separate coverage.
 
-Start with A. Reject zero timer intervals unless a setting explicitly defines zero as
-disabled. Define accepted socket-buffer values, validate representability, and keep OS
-rejection separate from invalid input. Use chrono durations internally; changing all public
-fields to duration types can remain a later API choice.
-
-**Completion check:** invalid values produce a predictable result; oversized buffer requests
-do not silently narrow; retained/reset parameters and current live-header tests still work.
-Validate at the points that actually consume mutable settings, not only in `connect()`.
+**Recorded validation:** fresh GCC `complete` build and all seven tests passed; Clang ASan
+unit, TLS loopback, and feeder suites passed. Formatting, headers, Python, and reference checks
+pass. Bootstrap's Git setup remains blocked by read-only metadata; direct CMake presets were used.
 
 <a id="ws-05"></a>
 
@@ -366,7 +365,7 @@ public fields only when callers need them.
 
 The current test sources cover construction/URL integration, replacement while resolving,
 repeated close/destruction, two allocation-failure cases, TLS echo/push, fragmentation with
-ping/pong, peer close, partial-frame EOF, certificate/hostname rejection, live headers and agent
+ping/pong, peer close, partial-frame EOF, certificate/hostname rejection, validated headers and agent
 settings, repeated outbound pings, and a write-error transition to disconnecting. They also
 include source-tree/installed-library consumers. This is an inventory of tests, not a claim
 that they were executed or passed during this review.
@@ -403,8 +402,9 @@ Markdown/link and diff review.
 
 Batches 1 and 2 are complete, including the direct-header module boundary, state/lifetime
 contracts, moves, TLS ownership, session-owned delegates, and setup-storage disposal.
-`WS-DETACH` is retired in favor of retained parent links. Continue with parameter validation
-and update rules in [WS-04](#ws-04); timer cleanup and broader exception guarantees remain
-in stages 6 and 8. Contract checks and TODO maintenance accompany each stage.
+`WS-DETACH` is retired in favor of retained parent links. WS-04 parameter validation and
+inactive-only updates are also complete. Continue with message sizes and limits in
+[WS-05](#ws-05); timer cleanup and broader exception guarantees remain in stages 6 and 8.
+Contract checks and TODO maintenance accompany each stage.
 Coordinate the timer/clock redesign in batch 6 with the shared execution proposal in
 [current_work.md](current_work.md).

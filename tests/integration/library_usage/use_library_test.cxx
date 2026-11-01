@@ -22,7 +22,11 @@ int main()
                                               [](nom::web_socket&, const nom::event::on_connected&) {},
                                               [](nom::web_socket&, const nom::event::on_disconnected&) {},
                                               [](nom::web_socket&, const nom::event::network_error&) {}};
-    client.params().headers = {{.name = "X-Client", .value = "library-usage"}};
+    auto params = client.params();
+    params.headers = {{.name = "X-Client", .value = "library-usage"}};
+    if (!params.validate())
+        return 1;
+    client.update_params(params);
     client.connect(callbacks);
     client.close();
     client.connect(callbacks);

@@ -20,6 +20,7 @@ namespace
     thread_local const nom::web_socket* failing_client = nullptr;
     thread_local nom::ws_status failing_status = nom::ws_status::connecting;
     thread_local bool failure_injected = false;
+    thread_local unsigned allocations_before_failure = 0;
 
     struct connection_allocation_failure
     {
@@ -29,6 +30,7 @@ namespace
             failing_client = &client;
             failing_status = status;
             failure_injected = false;
+            allocations_before_failure = 0;
         }
 
         ~connection_allocation_failure()
@@ -44,9 +46,13 @@ namespace
 {
     if (failing_client && failing_status == failing_client->status())
     {
-        failing_client = nullptr;
-        failure_injected = true;
-        throw injected_allocation_failure{};
+        if (allocations_before_failure == 0)
+        {
+            failing_client = nullptr;
+            failure_injected = true;
+            throw injected_allocation_failure{};
+        }
+        --allocations_before_failure;
     }
     if (void* memory = std::malloc(size ? size : 1))
         return memory;
@@ -178,4 +184,45 @@ TEST_CASE("Move construction allocation failure preserves the source attempt")
     source.close();
     io.run();
     CHECK(calls == 0);
+}
+
+TEST_CASE("Parameter copy failure preserves all installed settings")
+{
+    nom::init_logger(nom::main_logger);
+    boost::asio::io_context io;
+    nom::web_socket client(io.get_executor(), nom::url("wss://127.0.0.1:1/"));
+    auto original = client.params();
+    original.headers = {{.name = "X-Feed", .value = "original"}};
+    original.agent_name = "original-agent";
+    client.update_params(original);
+    const auto id = client.session_id();
+    auto candidate = original;
+    candidate.headers.front().value.assign(128, 'x');
+    candidate.agent_name.assign(128, 'a');
+    candidate.ping_interval_sec = 5;
+    for (const unsigned permitted_allocations : {0u, 1u, 2u})
+    {
+        CAPTURE(permitted_allocations);
+        bool caught_original = false;
+        {
+            connection_allocation_failure failure(client, nom::ws_status::init);
+            allocations_before_failure = permitted_allocations;
+            try
+            {
+                client.update_params(candidate);
+            }
+            catch (const injected_allocation_failure&)
+            {
+                caught_original = true;
+            }
+        }
+        REQUIRE(failure_injected);
+        REQUIRE(caught_original);
+        CHECK(client.params().headers.front().value == "original");
+        CHECK(client.params().agent_name == "original-agent");
+        CHECK(client.params().ping_interval_sec == original.ping_interval_sec);
+        CHECK(client.session_id() == id);
+        CHECK(client.status() == nom::ws_status::init);
+        CHECK(io.poll() == 0);
+    }
 }

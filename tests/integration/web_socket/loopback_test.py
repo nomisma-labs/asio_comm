@@ -177,7 +177,6 @@ def run_headers_case(client, context, certificate):
         ({"authorization": "Bearer updated", "x-attempt": "first", "user-agent": "headers-test/1"}, ()),
         ({"authorization": "Bearer second", "x-attempt": "second", "user-agent": "headers-test/2"}, ()),
         ({"authorization": "Bearer second", "x-attempt": "second", "user-agent": "headers-test/2"}, ()),
-        (None, ()),  # Oversized header: client must report the setup exception before sending HTTP.
         ({}, ("authorization", "x-attempt", "x-oversized")),  # Rejected upgrade must remain conn_failed.
         ({}, ("authorization", "x-attempt", "x-oversized")),
     )
@@ -193,26 +192,18 @@ def run_headers_case(client, context, certificate):
                     raw, _ = listener.accept()
                     with raw:
                         raw.settimeout(8)
-                        try:
-                            with context.wrap_socket(raw, server_side=True) as connection:
-                                if expected is None:
-                                    assert connection.recv(1024) == b"", "unexpected HTTP request after setup failure"
-                                    continue
-                                handshake(connection, port, expected, absent, reject=attempt == 4)
-                                if attempt == 4:
-                                    assert connection.recv(1024) == b"", "unexpected data after rejected upgrade"
-                                    continue
-                                if attempt == 2:
-                                    # Repeated pings verify that completion rearms the timer.
-                                    for _ in range(3):
-                                        assert read_frame(connection) == (0x89, b""), "expected configured outbound ping"
-                                        connection.sendall(b"\x8a\x00")
-                                connection.sendall(b"\x81\x08accepted")
-                                assert connection.recv(1024) == b"", "unexpected data after client close"
-                        except (BrokenPipeError, ConnectionResetError, ssl.SSLEOFError):
-                            # Immediate close after setup failure may interrupt the server's TLS completion.
-                            if expected is not None:
-                                raise
+                        with context.wrap_socket(raw, server_side=True) as connection:
+                            handshake(connection, port, expected, absent, reject=attempt == 3)
+                            if attempt == 3:
+                                assert connection.recv(1024) == b"", "unexpected data after rejected upgrade"
+                                continue
+                            if attempt == 2:
+                                # Repeated pings verify that completion rearms the timer.
+                                for _ in range(3):
+                                    assert read_frame(connection) == (0x89, b""), "expected configured outbound ping"
+                                    connection.sendall(b"\x8a\x00")
+                            connection.sendall(b"\x81\x08accepted")
+                            assert connection.recv(1024) == b"", "unexpected data after client close"
             except BaseException as error:
                 errors.append(error)
 
@@ -227,7 +218,7 @@ def run_headers_case(client, context, certificate):
         assert not worker.is_alive(), "headers: server did not stop"
         assert not errors, f"headers: server errors: {errors}; client: {result.stdout} {result.stderr}"
         assert result.returncode == 0, result.stdout + result.stderr
-        print("params: passed (live headers/agent, pings, reset, setup exception, rejected upgrade, recovery)")
+        print("params: passed (validated headers/agent, active-update rejection, pings, reset, rejected upgrade, recovery)")
 
 
 def run_disconnecting_case(client, context, certificate):

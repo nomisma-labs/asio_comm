@@ -65,7 +65,6 @@ export namespace nom
         };
 
         // TODO IDs and stage definitions: ws_current_work.md.
-        // TODO[WS-PARAMS] (stage WS-04): Review parameter contracts and validation.
         // TODO[WS-PING] (stage WS-06): Understand different types of pings and why we need
         // enable_outbound_ping.
         // TODO[WS-IDLE] (stage WS-06): Review the idle timer and test it properly
@@ -83,6 +82,8 @@ export namespace nom
         unsigned ping_interval_sec{default_ping_interval_sec};
         unsigned socket_send_buf_size{default_socket_send_buf_size};
         unsigned socket_recv_buf_size{default_socket_recv_buf_size};
+
+        [[nodiscard]] std::expected<void, std::string> validate() const;
     };
 
     class web_socket;
@@ -94,12 +95,6 @@ export namespace nom
         };
     } // namespace detail
 
-    // DONE TODO[WS-INIT] (stage WS-02): Introduce init (a session should start in init, not in disconnected).
-    // DONE TODO[WS-FAILURE-NAME] (stage WS-02): Rename failed to conn_failed.
-    // DONE TODO[WS-TERMINAL-FAILURE] (stage WS-02): Make conn_failed terminal, on the same level as disconnected.
-    // RETIRED TODO[WS-DETACH] (stage WS-02): Any terminal state (disconnected, conn_failed) should also be
-    // detached from the parent.
-    // Retain the parent link in every state; terminal status suppresses late completions.
     NOM_ENUM(ws_status, std::uint8_t, init, connecting, connected, disconnecting, conn_failed, disconnected)
 
     // TODO[WS-CABLE-LOSS] (stage WS-06): Reproduce hard disconnection (unplug the network cable).
@@ -142,11 +137,8 @@ export namespace nom
         void update_delegate(const delegate& callbacks);
         [[nodiscard]] const delegate& callbacks() const noexcept;
 
-        ws_params& params() noexcept
-        {
-            return params_;
-        }
-        const ws_params& params() const noexcept
+        void update_params(const ws_params& params);
+        [[nodiscard]] const ws_params& params() const noexcept
         {
             return params_;
         }

@@ -28,9 +28,11 @@ int main(int argc, char** argv)
         const bool assign = mode == "assign" || mode == "connected_assign";
         const bool after_connected = mode == "connected" || mode == "connected_assign";
         nom::web_socket source(io.get_executor(), address);
-        source.params().headers = {{.name = "X-Move", .value = "source"}};
-        source.params().enable_outbound_ping = true;
-        source.params().ping_interval_sec = 1;
+        auto params = source.params();
+        params.headers = {{.name = "X-Move", .value = "source"}};
+        params.enable_outbound_ping = true;
+        params.ping_interval_sec = 1;
+        source.update_params(params);
         std::optional<nom::web_socket> destination;
         nom::web_socket* expected_owner = &source;
         boost::asio::steady_timer deadline(io);

@@ -184,12 +184,37 @@ with success if already queued.
 - **`[update_delegate]`** — replace the current session's delegate; no lifecycle transition.
   `callbacks()` borrows that session's delegate. A borrowed reference remains valid while
   its session lives; reconnect installs a different session with its own callback storage.
-- **Parameter edits** — `params()` exposes the owner's `ws_params`. Edits must be serialized
-  with calls and completions; each operation reads the current values when it needs them.
-  No change detection or automatic reconfiguration occurs: existing deadlines, socket options
-  and sent handshake headers remain unchanged until the corresponding setup runs again.
-  The outbound-ping flag starts the timer only at handshake completion; later edits do not
-  start or stop it. `params() = {}` restores defaults.
+- **Parameter updates** — `params()` returns `const ws_params&`. `update_params(const ws_params&)`
+  replaces the whole configuration only in `init`, `conn_failed`, or `disconnected`. It first
+  calls `ws_params::validate()` and throws `std::invalid_argument` with the same diagnostic for
+  invalid values. A valid update during `connecting`, `connected`, or `disconnecting` throws
+  `std::logic_error`. Validation precedes the state check. The wrapper owns all update logic;
+  the session continues reading its parent's settings, which remain fixed throughout an attempt.
+  Validation, state rejection, and copy/allocation failure leave settings, status, session identity,
+  and pending operations unchanged. Copying a candidate and swapping it into place provides the
+  commit guarantee, including `update_params(client.params())`. Calls must remain serialized.
+  Accepted settings persist across reconnects; `update_params({})` restores defaults while inactive.
+
+`ws_params::validate() const` returns `std::expected<void, std::string>`. It is independent of
+session state and performs no I/O or mutation. Success is an empty expected value; failure is
+the first field diagnostic, such as `/ping_interval_sec must be positive` or
+`/headers/1/name duplicates an earlier header`. Error-string allocation can still throw.
+
+| Parameter | Validation |
+| --- | --- |
+| `async_operation_timeout_sec` | Positive. |
+| `ping_interval_sec` | Positive even when outbound pings are disabled, because idle detection uses it. Setup timeout and ping interval have no required ordering. |
+| Socket buffer sizes | Between 1 and `INT_MAX`; OS acceptance is determined when socket options are applied. |
+| `agent_name` | Contains non-whitespace content, valid HTTP field-value characters, and a supported field length. |
+| Header names | Nonempty HTTP tokens, within the backend limit, unique under case-insensitive comparison. |
+| Header values | Empty values are allowed; reject CR, LF, NUL, other controls except HTAB, and DEL. Values must fit the backend limit. |
+
+The current backend supports at most 65,533 bytes for a field name or value, including
+`agent_name`. `Host`, `Connection`, `Upgrade`, `Sec-WebSocket-Key`, `Sec-WebSocket-Version`,
+`Sec-WebSocket-Accept`, `Sec-WebSocket-Extensions`, `Content-Length`, and `Transfer-Encoding`
+are managed handshake/framing fields and cannot be overridden. `User-Agent` remains an allowed
+override of `agent_name`; `Sec-WebSocket-Protocol` is not reserved by this validator.
+Header syntax follows the [HTTP field rules](https://www.rfc-editor.org/rfc/rfc9110.html#section-5).
 
 ### Connection completions
 
@@ -329,7 +354,7 @@ These are outputs of the current machine, shown as actions on edges:
 
 ## Usage constraints and deferred work
 
-- **Calls and callbacks.** Serialize client calls, parameter edits and completions. Delegates
+- **Calls and callbacks.** Serialize client calls, parameter updates and completions. Delegates
   must not throw or replace the delegate while it is executing.
   Serialize moves with both wrappers' calls and completions, and perform them outside delegate
   invocation; post a move if requested by a callback. Captured references to the original wrapper
@@ -361,8 +386,8 @@ The existing tests cover:
   closing pending setup and suppressing its queued completion.
 - Local TLS send/echo, fragmented messages with interleaved ping/pong, server-pushed data,
   peer close, partial-frame EOF, close from a data callback, and certificate/hostname rejection.
-- Live headers/User-Agent settings, retained/reset parameters on reconnect, three successive
-  configured pings, handshake setup exception reporting, rejected upgrades, retained terminal
+- Validated headers/User-Agent settings, retained/reset parameters on reconnect, three successive
+  configured pings, rejected active updates, rejected upgrades, retained terminal
   state after rejected sends/close, and recovery through a fresh connection.
 - Write-failure transition to disconnecting, rejected further sends, one terminal notification,
   and prevention of receive/timer startup when closing from the connected callback.
@@ -372,5 +397,7 @@ The existing tests cover:
   usable moved-from wrappers, self-move, and replacement-allocation failure.
 - Callback replacement during setup, reconnecting from the current session's borrowed
   callbacks, and callback-capture lifetime while canceled operations are drained or discarded.
+- Parameter boundaries, HTTP syntax/lengths, duplicate and reserved headers, all six update
+  states, and unchanged configuration after validation, state, or injected copy failures.
 
 Idle timer expiry, stalled pings, and the deferred write/exception cases above remain untested.

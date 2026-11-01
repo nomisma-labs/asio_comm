@@ -144,7 +144,9 @@ namespace
             : requests_(subscription_requests(config)),
               client_(nom::ctx(this).io.get_executor(), nom::url(config.endpoint))
         {
-            client_.params().enable_outbound_ping = true;
+            auto params = client_.params();
+            params.enable_outbound_ping = true;
+            client_.update_params(params);
         }
 
         void on_request(nom::event::service_command command)
