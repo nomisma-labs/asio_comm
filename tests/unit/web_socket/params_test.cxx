@@ -14,6 +14,12 @@ TEST_CASE("WebSocket parameter validation checks numeric bounds")
 {
     nom::ws_params params;
     REQUIRE(params.validate().has_value());
+    CHECK(params.max_message_size == 16 * 1024 * 1024);
+    params.max_message_size = 0;
+    REQUIRE_FALSE(params.validate());
+    CHECK(params.validate().error() == "/max_message_size must be positive");
+    params.max_message_size = 1;
+    CHECK(params.validate().has_value());
 
     params.async_operation_timeout_sec = 0;
     REQUIRE_FALSE(params.validate());
@@ -145,6 +151,7 @@ TEST_CASE("Parameter updates are transactional and require an inactive session")
     params.agent_name = "configured-agent/1";
     params.headers = {{.name = "X-Feed", .value = "original"}};
     params.socket_send_buf_size = 4096;
+    params.max_message_size = 32 * 1024 * 1024;
     client.update_params(params);
     client.update_params(client.params());
     CHECK(client.status() == nom::ws_status::init);
@@ -152,6 +159,7 @@ TEST_CASE("Parameter updates are transactional and require an inactive session")
     CHECK(client.params().agent_name == params.agent_name);
     CHECK(client.params().headers.front().value == "original");
     CHECK(client.params().socket_send_buf_size == 4096);
+    CHECK(client.params().max_message_size == params.max_message_size);
 
     auto invalid = params;
     invalid.ping_interval_sec = 0;

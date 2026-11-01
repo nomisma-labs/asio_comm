@@ -5,6 +5,7 @@ module;
 
 #include <spd_logger/logging.h>
 
+#include <boost/asio/compose.hpp>
 #include <boost/asio/ssl/host_name_verification.hpp>
 #include <boost/asio/steady_timer.hpp>
 #include <boost/beast/core.hpp>
@@ -29,6 +30,39 @@ namespace nom
 
     namespace
     {
+        struct ws_tls_stream : beast::ssl_stream<beast::tcp_stream>
+        {
+            using base_type = beast::ssl_stream<beast::tcp_stream>;
+            using base_type::base_type;
+
+            beast::error_code teardown_error;
+        };
+
+        struct tls_teardown_op
+        {
+            ws_tls_stream& stream;
+            beast::role_type role;
+
+            template <typename Self> void operator()(Self& self)
+            {
+                self.reset_cancellation_state(net::enable_total_cancellation());
+                beast::async_teardown(role, static_cast<ws_tls_stream::base_type&>(stream), std::move(self));
+            }
+
+            template <typename Self> void operator()(Self& self, beast::error_code ec)
+            {
+                // Match Beast's treatment of EOF during TLS shutdown.
+                stream.teardown_error = ec == net::error::eof ? beast::error_code{} : ec;
+                // Let Beast return its WebSocket result; report the TLS error separately.
+                self.complete(beast::error_code{});
+            }
+        };
+
+        template <typename Handler> auto async_teardown(beast::role_type role, ws_tls_stream& stream, Handler&& handler)
+        {
+            return net::async_compose<Handler, void(beast::error_code)>(tls_teardown_op{stream, role}, handler, stream);
+        }
+
         bool is_header_name(std::string_view name) noexcept
         {
             return !name.empty() && std::ranges::all_of(name,
@@ -78,6 +112,8 @@ namespace nom
             return std::unexpected("/socket_send_buf_size must be in [1, INT_MAX]");
         if (socket_recv_buf_size == 0 || socket_recv_buf_size > max_buffer_size)
             return std::unexpected("/socket_recv_buf_size must be in [1, INT_MAX]");
+        if (max_message_size == 0)
+            return std::unexpected("/max_message_size must be positive");
         if (agent_name.find_first_not_of(" \t") == std::string::npos)
             return std::unexpected("/agent_name must be nonempty");
         if (agent_name.size() > http::fields::max_value_size)
@@ -419,6 +455,7 @@ namespace nom
                     // Beast's WebSocket timeout takes over after the TLS handshake.
                     beast::get_lowest_layer(stream_).expires_never();
                     stream_.set_option(websocket::stream_base::timeout::suggested(beast::role_type::client));
+                    stream_.read_message_max(parent_->params_.max_message_size);
                     stream_.set_option(websocket::stream_base::decorator(
                         [this](websocket::request_type& req)
                         {
@@ -721,6 +758,24 @@ namespace nom
             }
         }
 
+        std::string disconnect_reason(beast::error_code ec) const
+        {
+            std::string reason;
+            if (ec == websocket::error::message_too_big)
+                reason = "Incoming WebSocket message exceeds max_message_size=" +
+                         std::to_string(parent_->params_.max_message_size) + " bytes";
+            else if (ec)
+                reason = ec.message();
+
+            if (const auto tls_error = stream_.next_layer().teardown_error)
+            {
+                if (!reason.empty())
+                    reason += "; ";
+                reason += "TLS shutdown error: " + tls_error.message();
+            }
+            return reason;
+        }
+
         void on_receive(beast::error_code ec, [[maybe_unused]] std::size_t bytes_transferred)
         {
             switch (status_)
@@ -736,7 +791,8 @@ namespace nom
                     idle_timer_.cancel();
                     set_status<ws_status::disconnected>();
                     delegate_(*parent_,
-                              event::on_disconnected{.ts = std::chrono::steady_clock::now(), .reason = ec.message()});
+                              event::on_disconnected{.ts = std::chrono::steady_clock::now(),
+                                                     .reason = disconnect_reason(ec)});
                     break;
                 }
 
@@ -824,16 +880,16 @@ namespace nom
             case ws_status::disconnecting:
             {
                 // This completion is the first path to finish disconnection.
-                std::string error_message;
-                if (ec)
+                set_status<ws_status::disconnected>();
+                auto error_message = disconnect_reason(ec);
+                if (!error_message.empty())
                 {
-                    error_message = ec.message();
                     LWARN("{} Shutdown error: {}", id(), error_message);
                 }
 
-                set_status<ws_status::disconnected>();
-                delegate_(*parent_,
-                          event::on_disconnected{.ts = std::chrono::steady_clock::now(), .reason = error_message});
+                delegate_(
+                    *parent_,
+                    event::on_disconnected{.ts = std::chrono::steady_clock::now(), .reason = std::move(error_message)});
                 break;
             }
             case ws_status::disconnected:
@@ -852,7 +908,7 @@ namespace nom
         delegate delegate_;
         std::string id_;
         std::unique_ptr<setup_state> setup_;
-        websocket::stream<beast::ssl_stream<beast::tcp_stream>> stream_;
+        websocket::stream<ws_tls_stream> stream_;
         beast::flat_buffer buffer_;
         network_timestamp last_recv_ts_{};
         net::steady_timer idle_timer_;

@@ -9,8 +9,8 @@ test sources. It also revisits the issue review in the conversation; no separate
 file was found in the repository. Findings below come from source inspection and dependency
 documentation. Completed stages below include their build, test, and fault-reproduction evidence.
 
-WS-01, WS-02, and parameter validation/update rules in WS-04 are complete.
-Message sizes and payload limits in WS-05 are next. Each stage includes its contract
+WS-01, WS-02, WS-04, and WS-05 are complete. Heartbeats, deadlines, and connection-loss
+detection in WS-06 are next. Each stage includes its contract
 documentation and focused tests; building a general failure test framework is not a
 prerequisite for the work.
 
@@ -19,7 +19,7 @@ prerequisite for the work.
 | [WS-01](#ws-01) | Mechanical source cleanup and public-export audit | Small | Consistent code and justified public names |
 | [WS-02](#ws-02) | State names, lifetime, and terminal cleanup | Medium–high; split into small steps | Predictable status and ownership transitions |
 | [WS-04](#ws-04) | Parameter validation and update rules | Medium | Settings with defined values and application times |
-| [WS-05](#ws-05) | Large messages and payload limits | Medium | Verified snapshot handling and bounded message size |
+| [WS-05](#ws-05) | Large messages and payload limits | Medium | Complete: verified snapshot handling and bounded message size |
 | [WS-06](#ws-06) | Heartbeats, deadlines, and connection-loss detection | Medium–high | Defined liveness behavior with reproducible tests |
 | [WS-07](#ws-07) | Sending and backpressure | High | Responsive executor under slow or failed writes |
 | [WS-08](#ws-08) | Exception guarantees | Medium–high | Reliable cleanup when operation initiation fails |
@@ -91,8 +91,8 @@ unit, TLS loopback, and feeder suites passed. Coverage includes terminal-state b
 queued completions, moves, callback lifetime/reconnect, setup failures, and allocation guards.
 Bootstrap's Git setup was blocked by read-only metadata; validation used CMake presets directly.
 
-**Next:** [WS-05](#ws-05) for message sizes and payload limits; WS-04 is complete below. Timer cleanup and peer-close
-protocol handling continue in [WS-06](#ws-06), sending/reentrancy in [WS-07](#ws-07), and broader exception
+**Next:** [WS-06](#ws-06) for heartbeats, deadlines, timer cleanup, and peer-close handling;
+WS-04 and WS-05 are complete below. Sending/reentrancy continues in [WS-07](#ws-07), and broader exception
 guarantees in [WS-08](#ws-08). Detailed behavior is in the [component contract](../../docs/web_socket.md).
 
 <a id="ws-04"></a>
@@ -138,32 +138,56 @@ pass. Bootstrap's Git setup remains blocked by read-only metadata; direct CMake 
 
 - [`WS-LARGE-MESSAGES`](web_socket.cppm) — Test sending and receiving really big messages (e.g. a huge Coinbase initial snapshot); distinguish socket buffers from message limits.
 
+**Complete — 2026-11-01.** Large-message handling, configurable limits, and disconnect diagnostics
+are implemented and validated. `WS-LARGE-MESSAGES` is covered by this completed stage.
+
 Relevant code: `buffer_`, `on_receive()`, `send()`, and the large-message TODO.
 
-There is no demonstrated 64 KiB incoming-message ceiling in this implementation. Reads assemble
-messages in a dynamic `beast::flat_buffer`. The installed Beast implementation defaults to a
-16 MiB incoming-message limit, consistent with its [message-size documentation](https://www.boost.org/doc/libs/latest/libs/beast/doc/html/beast/ref/boost__beast__websocket__stream/read_message_max/overload1.html).
+**Reproduction — 2026-11-01:** the public Spot `exchangeInfo` response with `permissions:["SPOT"]`
+contained 3,702 symbols and 17,743,355 bytes in one frame, measured with an independent TLS
+WebSocket probe. Suppressing permission sets reduced a response to about 6.71 MB, which the
+existing client received. These are point-in-time observations, not fixed dataset sizes.
 
-**Options:** document and retain that default, or expose a bounded `max_message_size` parameter
-and apply it to the stream. Prefer the explicit setting if feeders have different payload
-requirements. Do not use an effectively unlimited value as the first response to a large
-snapshot. Keep socket-buffer tuning independent.
+The actual ceiling is Beast's default **16 MiB incoming-message limit**, independent of the
+64 KiB socket receive buffer. A local TLS peer confirmed that the unchanged client sends close
+code **1009** when a frame advertises more than 16 MiB. The reproduced public disconnect reason was
+`application data after close notify (SSL routines)`: TLS shutdown masks the size diagnostic.
+See [Beast's size contract](https://www.boost.org/doc/libs/latest/libs/beast/doc/html/beast/ref/boost__beast__websocket__stream/read_message_max/overload1.html).
 
-Extend the [loopback frame helpers](../../tests/integration/web_socket/loopback_test.py): the
-current reader asserts a maximum frame size of 65,536 bytes and the tests mostly use small
-messages. A large message may also span many frames, so the test server must validate complete
-messages rather than assume one frame per send.
+**Implemented:** `ws_params::max_message_size` is a positive unsigned incoming-message byte limit,
+defaulting to 16 MiB and applied before upgrade on every attempt. Zero is rejected; the
+socket-buffer settings remain independent. The
+[Spot symbol provider](../../apps/binance_spot_symbol_provider/README.md) requests Spot
+metadata, selects a bounded 64 MiB limit, checks for API errors with basic string searches,
+and relays its original response before closing. It sets `showPermissionSets:false` to suppress
+unneeded permission-set contents while retaining trading filters and other symbol metadata.
 
-Test both directions above 64 KiB, fragmentation with interleaved control frames, and payloads
-just below/at/above a configurable message limit. Use a small configured limit for most boundary
-tests and one realistically large payload. Check that rejected input causes one terminal result
-and partial payloads are not delivered as complete messages. Preserve the documented borrowed
-payload lifetime. Avoid automatically shrinking the receive buffer after every message;
-measure retained capacity before adding an allocation policy.
+The [local TLS suite](../../tests/integration/web_socket/symbol_provider_test.py) checks
+byte-exact roundtrips at 65,535/65,536/65,537 bytes and above 2 MiB, a snapshot above 17 MiB,
+fragmented responses with interleaved pings, and messages just below/at/above a small configured
+limit. It reassembles outgoing continuation frames rather than assuming a single frame per
+send. Rejected and partial input must not become complete data events; the default-limit case
+also checks one terminal notification. Provider tests cover missing/non-200 status, error fields,
+whitespace, and opaque response forwarding. No JSON parsing or schema validation is performed.
 
-**Completion check:** complete payloads match byte-for-byte and limits behave predictably.
-Successful large sends to a reading peer can be tested here; stalled large sends belong to
-batch 7. Slow fragmented receives also feed the liveness tests in batch 6.
+**Error reporting:** the TLS stream adapter retains teardown errors separately so Beast can
+return its original WebSocket result. `on_disconnected.reason` identifies an oversized message
+as `Incoming WebSocket message exceeds max_message_size=N bytes` and appends any TLS shutdown
+error. Tests cover complete/fragmented overflow, clean teardown, a close reply during teardown,
+and abrupt transport loss. An unrelated protocol-error case verifies that TLS errors do not
+cause false size diagnoses. A transport failure while writing the close frame can still take
+precedence before teardown starts; write-failure handling continues in WS-07.
+
+**Recorded validation:** fresh GCC `complete` build and all eight tests passed; Clang ASan unit,
+TLS loopback, symbol-provider, and exchange-feeder suites passed with protocol/TLS error preservation.
+The request option change passed
+the local TLS provider suite; live verification returned 6,710,072 response bytes with 3,702
+empty permission sets and none populated. Formatting/static analysis, headers, naming, and
+Python checks passed. Bootstrap's
+Git setup was blocked by read-only metadata; direct CMake presets were used.
+
+The receive buffer retains capacity; no shrinking policy was added without allocation
+measurements. Stalled writes remain in WS-07, and slow fragmented-message liveness in WS-06.
 
 <a id="ws-06"></a>
 

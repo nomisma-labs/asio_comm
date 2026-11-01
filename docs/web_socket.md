@@ -205,6 +205,7 @@ the first field diagnostic, such as `/ping_interval_sec must be positive` or
 | `async_operation_timeout_sec` | Positive. |
 | `ping_interval_sec` | Positive even when outbound pings are disabled, because idle detection uses it. Setup timeout and ping interval have no required ordering. |
 | Socket buffer sizes | Between 1 and `INT_MAX`; OS acceptance is determined when socket options are applied. |
+| `max_message_size` | Incoming-message byte limit in `[1, UINT_MAX]`; defaults to 16 MiB. Applies to the entire message across fragments, independently of socket buffers. |
 | `agent_name` | Contains non-whitespace content, valid HTTP field-value characters, and a supported field length. |
 | Header names | Nonempty HTTP tokens, within the backend limit, unique under case-insensitive comparison. |
 | Header values | Empty values are allowed; reject CR, LF, NUL, other controls except HTAB, and DEL. Values must fit the backend limit. |
@@ -215,6 +216,19 @@ The current backend supports at most 65,533 bytes for a field name or value, inc
 are managed handshake/framing fields and cannot be overridden. `User-Agent` remains an allowed
 override of `agent_name`; `Sec-WebSocket-Protocol` is not reserved by this validator.
 Header syntax follows the [HTTP field rules](https://www.rfc-editor.org/rfc/rfc9110.html#section-5).
+
+`max_message_size` is applied before the WebSocket handshake on each attempt. A message whose
+declared or accumulated length exceeds it fails the read without delivering a partial
+`ws_data` event; the peer receives WebSocket close code 1009. The application receives
+`on_disconnected` with `Incoming WebSocket message exceeds max_message_size=N bytes` in
+`reason`. The TLS adapter preserves Beast's WebSocket result and retains any TLS teardown
+error separately; it is appended as `; TLS shutdown error: ...` instead of replacing the
+protocol diagnostic. Close-write failures can still be reported as transport errors before
+teardown begins. Zero is rejected rather than
+requesting the backend's unlimited mode. This setting does not limit outgoing messages or total
+process memory, and the receive buffer can retain allocated capacity after consuming a message.
+See [Beast's message-size option](https://www.boost.org/doc/libs/latest/libs/beast/doc/html/beast/ref/boost__beast__websocket__stream/read_message_max/overload1.html)
+and the [Spot symbol provider](../apps/binance_spot_symbol_provider/README.md).
 
 ### Connection completions
 
@@ -399,5 +413,11 @@ The existing tests cover:
   callbacks, and callback-capture lifetime while canceled operations are drained or discarded.
 - Parameter boundaries, HTTP syntax/lengths, duplicate and reserved headers, all six update
   states, and unchanged configuration after validation, state, or injected copy failures.
+- Byte-exact large sends and receives around 64 KiB and above 2 MiB, snapshots above 17 MiB,
+  fragmented input with interleaved control frames, and configured/default message-limit rejection.
+- Message-size diagnostics with the configured byte limit across clean TLS teardown, a close
+  reply during teardown, and abrupt transport loss; unrelated protocol errors retain their cause.
+- One-shot Spot symbol retrieval through the relay, complete raw output, basic API error checks,
+  partial-response rejection, and command-line validation against local TLS peers.
 
 Idle timer expiry, stalled pings, and the deferred write/exception cases above remain untested.
