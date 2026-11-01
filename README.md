@@ -16,6 +16,8 @@ WebSocket and logging/relay examples.
 
 - [Binance Spot feeder](apps/binance_spot_feeder/README.md): subscribe to best bid/ask, individual trades and depth
   streams for selected symbols and log incoming messages.
+- [Binance Spot resubscription test](apps/binance_spot_resubscribe_test/README.md): exercise a
+  subscription change directly from a receive callback on one connection.
 - [Binance Spot symbol provider](apps/binance_spot_symbol_provider/README.md): fetch complete Spot
   exchange information once over WebSocket and output its JSON response.
 - [Binance perpetual futures feeder](apps/binance_perp_feeder/README.md): log USDⓈ-M best bid/ask,

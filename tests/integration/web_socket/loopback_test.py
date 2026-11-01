@@ -358,7 +358,8 @@ def main():
                 client, context, certificate, ["--channels", "trade"], target, ["btcusdt@trade"],
             )
             for options in (["--symbols", ""], ["--symbols", 'BTCUSDT"'],
-                            ["--channels", "unknown"], ["--channels", "aggTrade"]):
+                            ["--channels", "unknown"], ["--channels", "aggTrade"],
+                            ["--resubscribe-after", "3"], ["--resubscribe-symbols", "ETHUSDT"]):
                 result = subprocess.run([client, *options], text=True, capture_output=True, timeout=3)
                 assert result.returncode == 1 and result.stderr and "Connecting" not in result.stdout, result
             print(f"{Path(client).name}: invalid settings rejected before connecting")

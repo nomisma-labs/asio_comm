@@ -52,8 +52,8 @@ Binance limits a connection to 1024 streams and disconnects it after 24 hours. T
 implementation answers server ping frames while reading; the feeder leaves outbound pings disabled.
 
 Payloads are logged unchanged, including subscription acknowledgements and API errors. The app
-does not parse messages, confirm subscription success, store data separately, or reconstruct an
-order book from depth updates. See the [WebSocket constraints](../../docs/web_socket.md#usage-constraints-and-deferred-work)
+does not use a JSON parser, confirm subscription success, store data separately, or reconstruct
+an order book from depth updates. See the [WebSocket constraints](../../docs/web_socket.md#usage-constraints-and-deferred-work)
 for the client's current execution and lifetime contract.
 
 ## Assembly structure
@@ -76,5 +76,8 @@ The assembly context outlives its nodes, and the app stays alive while the conte
 
 The local TLS integration test checks default and multi-symbol subscriptions, channel selection,
 logging of several messages, ping/pong handling, and invalid configuration. It needs no Binance access.
+
+For receive-callback subscription checks, use the
+[Binance Spot resubscription test](../binance_spot_resubscribe_test/README.md).
 
 See the [project overview](../../README.md) for dependencies and other examples.

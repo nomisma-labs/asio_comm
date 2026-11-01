@@ -38,6 +38,15 @@ if(nom_build_tests AND TARGET web_socket_example)
     set_tests_properties(${PROJECT_NAME}_web_socket_loopback PROPERTIES LABELS integration TIMEOUT 60)
 endif()
 
+if(nom_build_tests AND TARGET binance_spot_resubscribe_test)
+    find_package(Python 3.10 REQUIRED COMPONENTS Interpreter)
+    find_program(openssl_executable openssl REQUIRED)
+    add_test(NAME ${PROJECT_NAME}_binance_spot_resubscribe
+        COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/web_socket/resubscribe_test.py
+            --client $<TARGET_FILE:binance_spot_resubscribe_test> --openssl ${openssl_executable})
+    set_tests_properties(${PROJECT_NAME}_binance_spot_resubscribe PROPERTIES LABELS integration TIMEOUT 30)
+endif()
+
 if(nom_build_tests AND TARGET binance_spot_symbol_provider AND TARGET asio_comm_large_messages_client)
     find_package(Python 3.10 REQUIRED COMPONENTS Interpreter)
     find_program(openssl_executable openssl REQUIRED)

@@ -4,6 +4,8 @@
   and syncing, and the agent rules.
 - [web_socket.md](web_socket.md): state machine, events, usage constraints and validation coverage.
 - [Binance Spot feeder](../apps/binance_spot_feeder/README.md): market-data subscriptions and logging.
+- [Binance Spot resubscription test](../apps/binance_spot_resubscribe_test/README.md): receive-callback
+  sends and additional-symbol subscriptions on one connection.
 - [Binance Spot symbol provider](../apps/binance_spot_symbol_provider/README.md): one-shot exchange
   information over WebSocket, including large snapshots.
 - [Binance perpetual futures feeder](../apps/binance_perp_feeder/README.md): USDⓈ-M subscriptions and logging.

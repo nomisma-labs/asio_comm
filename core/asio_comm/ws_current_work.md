@@ -9,8 +9,8 @@ test sources. It also revisits the issue review in the conversation; no separate
 file was found in the repository. Findings below come from source inspection and dependency
 documentation. Completed stages below include their build, test, and fault-reproduction evidence.
 
-WS-01, WS-02, WS-04, and WS-05 are complete. WS-03, sending and deferred-send coordination,
-is next; WS-06 follows it. Each stage includes its contract
+WS-01, WS-02, WS-04, and WS-05 are complete. WS-03 is closed as unconfirmed; WS-06 is next.
+Each stage includes its contract
 documentation and focused tests; building a general failure test framework is not a
 prerequisite for the work.
 
@@ -18,14 +18,14 @@ prerequisite for the work.
 | --- | --- | --- | --- |
 | [WS-01](#ws-01) | Mechanical source cleanup and public-export audit | Small | Consistent code and justified public names |
 | [WS-02](#ws-02) | State names, lifetime, and terminal cleanup | Medium–high; split into small steps | Predictable status and ownership transitions |
-| [WS-03](#ws-03) | Sending and deferred-send coordination | High; reproduce first | Verified send re-entry handling and controlled buffering |
+| [WS-03](#ws-03) | Send re-entry investigation | Medium (investigation) | Closed — unconfirmed; baseline passes |
 | [WS-04](#ws-04) | Parameter validation and update rules | Medium | Settings with defined values and application times |
 | [WS-05](#ws-05) | Large messages and payload limits | Medium | Complete: verified snapshot handling and bounded message size |
 | [WS-06](#ws-06) | Heartbeats, deadlines, and connection-loss detection | Medium–high | Defined liveness behavior with reproducible tests |
 | [WS-08](#ws-08) | Exception guarantees | Medium–high | Reliable cleanup when operation initiation fails |
 | [WS-09](#ws-09) | Optional ownership and dependency changes | Variable | Changes justified by actual requirements |
 
-Stage numbers identify work batches rather than completion order; WS-03 is the next active batch.
+Stage numbers identify work batches rather than completion order; WS-06 is next.
 Other stage IDs remain unchanged.
 Source comments use `TODO[WS-…] (stage WS-…)`; each TODO ID identifies one concern and stays
 unchanged if work is reordered. Search either source file for the exact TODO ID. The lists at the start of each stage
@@ -92,89 +92,47 @@ unit, TLS loopback, and feeder suites passed. Coverage includes terminal-state b
 queued completions, moves, callback lifetime/reconnect, setup failures, and allocation guards.
 Bootstrap's Git setup was blocked by read-only metadata; validation used CMake presets directly.
 
-**Next:** [WS-03](#ws-03) for sending and deferred-send coordination. WS-04 and WS-05 are complete
-below; heartbeats, deadlines, timer cleanup, and peer-close handling follow in [WS-06](#ws-06).
+**Next:** [WS-06](#ws-06) for heartbeats, deadlines, timer cleanup, and peer-close handling.
+WS-03 is closed as unconfirmed; WS-04 and WS-05 are complete below.
 Broader exception guarantees remain in [WS-08](#ws-08). Detailed behavior is in the
 [component contract](../../docs/web_socket.md).
 
 <a id="ws-03"></a>
 
-**WS-03. Sending and deferred-send coordination**
+**WS-03. Send re-entry investigation**
 
 **Source TODOs covered:**
 
 - [`WS-SEND-REENTRY`](web_socket.cpp) — Try sending from inside the ws_data receiver handler to reproduce re-entry into send.
 
-**Next — implementation plan.** Keep immediate sending where it is safe and introduce an
-owned asynchronous send buffer for cases that require deferral. The state and buffer belong
-to `session`; `web_socket` remains the holder/forwarder. Relevant code: `session::send()`,
-`on_receive()`, ping/control handlers, and `shutdown()`.
+**Closed — unconfirmed, 2026-11-01.** No WebSocket send failure was reproduced. The code retains
+`UNCONFIRMED TODO[WS-SEND-REENTRY]`; this closes the investigation without claiming that every
+possible operation overlap is safe. HTTP-side observations do not establish a WebSocket defect.
 
-1. **Reproduce the issue before changing send behavior.** Extend the local TLS fixture to send
-   from a `ws_data` handler, including several sends and receive-buffer-backed input. Compare
-   this with sending outside the callback, during an outbound ping, and while reads process
-   peer pings. Also test a slow/non-reading peer with a test-process deadline. Record the
-   failing operation sequence, assertion/error/hang, and a passing control case. Sending from
-   a callback is not by itself proof of an overlap bug: its Beast read operation may already
-   have completed. If the minimal case passes, refine the reproduction rather than assuming
-   the cause is unfinished receive handling.
+**Evidence:** the standalone
+[Binance Spot resubscription test](../../apps/binance_spot_resubscribe_test/README.md) adds
+ETHUSDT from the Nth BTCUSDT market-data callback on one connection. The local TLS peer verifies
+exact timing at N=1/3/100, exclusion of acknowledgements from the count, ID 2 acknowledgement,
+and continued data for both symbols. Fragmented input, interleaved pings, and a ping buffered
+behind the triggering message pass. A 12-second public Binance check also received the second
+acknowledgement and data for both symbols; the external harness stopped the continuous tool.
 
-2. **Introduce conditional asynchronous buffering.** Preserve the immediate path when no
-   conflicting work or older buffered message exists. Otherwise retain an owned copy and
-   send it asynchronously at a safe opportunity. Keep one data write in flight, preserve FIFO
-   order, and prevent a later immediate send from overtaking buffered data. Payload storage
-   must remain stable until write completion, including when input came from a temporary
-   string or a borrowed receive view. Bound buffered bytes/messages and define rejection on
-   saturation; never overwrite an accepted message. Ordinary immediate sends should not
-   require a queue allocation.
+**Recorded validation:** fresh GCC build and all nine tests passed; Clang ASan ordinary
+loopback and dedicated resubscription suites passed. Formatting, static analysis, header,
+Python, and local-link checks passed. The feeder retains its continuous-subscription role;
+the dedicated tool and test remain available for future reproductions.
 
-3. **Introduce the internal immediate-send gate.** Use a session variable such as
-   `send_disabled_` to defer direct sends while the unsafe conditions established by the
-   reproduction apply. This is separate from `ws_status` and does not add a public connection
-   state. Identify exactly who sets/restores it and schedules the drain. Nested callbacks or
-   another outstanding write/control operation must not have their restriction accidentally
-   cleared by an unrelated completion. Use `post` when leaving the current callback is
-   required; `dispatch` may run inline and therefore does not guarantee deferral.
+**Outcome:** retain the current blocking `send()` and its completed-write boolean contract.
+No asynchronous send buffer, send gate, or new public send API was introduced. Blocking writes
+can still stall the executor, and mixed write/control-operation cases were not exhaustively
+tested; these remain documented usage limitations rather than a confirmed re-entry bug.
 
-   **Important:** do not disable all sending for the entire lifetime of an outstanding read.
-   A read may wait indefinitely, and the peer may need our request before it sends any data.
-   Beast supports one asynchronous read alongside one asynchronous data write and coordinates
-   its control-frame writes. The gate must distinguish callback re-entry/direct synchronous
-   writes from that supported overlap. A flag around our delegate alone does not establish
-   whether Beast has an internal control write pending; prove the safe direct-send condition
-   before relying on it. [Beast operation rules](https://www.boost.org/doc/libs/latest/libs/beast/doc/html/beast/using_websocket/notes.html),
-   [write lifetime and exclusion rules](https://www.boost.org/doc/libs/latest/libs/beast/doc/html/beast/ref/boost__beast__websocket__stream/async_write.html).
-
-4. **Integrate and test the complete lifecycle.** Connect gating, draining, write completion,
-   ping/close coordination, and failure handling. Reject new sends once closing starts.
-   Proposed initial policy: explicit `close()` aborts and cancels queued data; internal
-   graceful shutdown stops accepting data and defines how outstanding writes finish or fail.
-   Reconnect never replays old-session messages. Canceling a queue must not release the active
-   write's payload before its completion. Test ordering, repeated re-entry, temporary/borrowed
-   payloads, saturation, write errors, and close/reconnect/move with pending data. Check timer
-   and read progress, one terminal notification, and suppression of obsolete-session callbacks.
-   Update affected examples, tests, and the send contract together.
-
-**Contract decision before implementation:** today's `send() == true` means a blocking write
-completed. With conditional buffering, recommend defining it as acceptance for immediate or
-deferred sending; later write failure follows the connection-error/disconnection policy.
-Document this change explicitly. If callers need per-message completion, choose a result or
-completion callback instead; acceptance cannot promise delivery or peer processing. Queue
-capacity and overflow behavior also need an explicit choice before implementation.
-
-**Known limitation of the hybrid approach:** a retained blocking fast path can still stall on
-a slow peer, and an executor timer cannot interrupt it. Conditional buffering addresses the
-reproduced coordination problem; it does not by itself guarantee nonblocking sends. If the
-reproduction shows that safe direct-send conditions cannot be established, or bounded executor
-latency is required, consider asynchronous writes for all sends. Preserve the serialized-call
-contract; buffering does not make the client thread-safe. General liveness policy stays in
-WS-06, and broader exception guarantees in WS-08; initiation failures in the new send path
-must nevertheless leave its gate, queue, and active payload consistent.
-
-**Completion check:** the original reproduction passes, deferral occurs only for defined
-conditions or existing queued work, accepted messages retain order and valid storage, and
-close/reconnect/failure paths produce predictable outcomes. Any remaining blocking behavior
-is documented and demonstrated separately from the re-entry fix.
+**Reopen condition:** a reproducible WebSocket assertion, error, hang, or delivery/order failure
+with the operation sequence identified. If reopened, use the agreed sequence: reproduce,
+introduce an owned deferred buffer only where required, add a session-level immediate-send
+gate, then integrate lifecycle handling and tests. Buffer bounds, payload lifetime, and any
+change from completed-write to acceptance semantics must be defined explicitly at that time.
+These proposals are deferred and do not block the next stage.
 
 <a id="ws-04"></a>
 
@@ -257,7 +215,7 @@ as `Incoming WebSocket message exceeds max_message_size=N bytes` and appends any
 error. Tests cover complete/fragmented overflow, clean teardown, a close reply during teardown,
 and abrupt transport loss. An unrelated protocol-error case verifies that TLS errors do not
 cause false size diagnoses. A transport failure while writing the close frame can still take
-precedence before teardown starts; write-failure handling continues in WS-03.
+precedence before teardown starts; this remains a documented transport-error limitation.
 
 **Recorded validation:** fresh GCC `complete` build and all eight tests passed; Clang ASan unit,
 TLS loopback, symbol-provider, and exchange-feeder suites passed with protocol/TLS error preservation.
@@ -268,7 +226,8 @@ Python checks passed. Bootstrap's
 Git setup was blocked by read-only metadata; direct CMake presets were used.
 
 The receive buffer retains capacity; no shrinking policy was added without allocation
-measurements. Stalled writes remain in WS-03, and slow fragmented-message liveness in WS-06.
+measurements. Blocking writes remain a documented limitation; slow fragmented-message liveness
+continues in WS-06.
 
 <a id="ws-06"></a>
 
@@ -287,6 +246,12 @@ measurements. Stalled writes remain in WS-03, and slow fragmented-message livene
 **Lifecycle follow-up from WS-02 (no separate source TODO):** make idle/ping cancellation
 consistent across peer close, read errors, explicit close, and graceful-close completion.
 In particular, peer-close/read-error paths can leave a ping wait pending until it expires.
+
+**First small step:** reproduce terminal timer cleanup with outbound pings enabled and a
+delegate that leaves the client alive after `on_disconnected`. Check peer close and read errors
+without an application `close()` masking the cleanup. Both timers should stop without waiting
+for the next ping interval, rearming, or emitting another terminal event. Address this lifecycle
+case before changing idle-activity policy or adding timeout settings.
 
 **WIP:** application connection deadlines have been removed from all examples, including the
 WebSocket example's overall response timer that also covered connection setup. An overall
@@ -448,7 +413,7 @@ Markdown/link and diff review.
 | [`WS-CABLE-LOSS`](web_socket.cppm) | Reproduce hard disconnection (unplug the network cable). | [WS-06](#ws-06) |
 | [`WS-INTERFACE-LOSS`](web_socket.cppm) | Reproduce Docker-based interface disconnection (a soft disconnection of a virtual interface may only be caught by the idle timer). | [WS-06](#ws-06) |
 | [`WS-PEER-CLOSE`](web_socket.cppm) | Reproduce normal server disconnection (e.g. Binance resets the MD connection once per day). | [WS-06](#ws-06) |
-| [`WS-SEND-REENTRY`](web_socket.cpp) | Try sending from inside the ws_data receiver handler to reproduce re-entry into send. | [WS-03](#ws-03) |
+| [`WS-SEND-REENTRY`](web_socket.cpp) | Try sending from inside the ws_data receiver handler to reproduce re-entry into send. | [WS-03](#ws-03); closed — unconfirmed. |
 | [`WS-EXCEPTIONS`](web_socket.cppm) | Consider making the interface noexcept for everything except the constructor. | [WS-08](#ws-08) |
 | [`WS-CONNECT-DEADLINE`](web_socket.cpp) | Make the connection procedure time-bound (we can use default_async_operation_timeout_sec for it). | [WS-06](#ws-06) |
 | [`WS-SETUP-STORAGE`](web_socket.cpp) | Dispose of state required only for connection setup after the connection is established (e.g. resolver). | [WS-02](#ws-02) |
