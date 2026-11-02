@@ -39,7 +39,11 @@ namespace
 {
     struct app_config
     {
+        // Public JSON market data needs no login; Spot instrument IDs use BASE-QUOTE (BTC-USDT).
+        // https://www.okx.com/docs-v5/en/#overview-websocket
         std::string endpoint{"wss://ws.okx.com/ws/v5/public"};
+        // CLI symbols may use either case; validate_config normalizes them to the uppercase instId
+        // spelling (btc-usdt -> BTC-USDT). Lowercase channel aliases are mapped to API names separately.
         std::vector<std::string> symbols{"BTC-USDT"};
         std::vector<std::string> channels{"ticker", "trade", "depth"};
         nom::log_config log{.level = nom::log_level::info};
@@ -86,10 +90,11 @@ namespace
         {
             if (symbol.empty())
                 throw std::invalid_argument("Symbols must not be empty");
+            // This example accepts ASCII identifiers; the classic locale fixes their wire casing.
             for (char& letter : symbol)
             {
                 if (letter >= 'a' && letter <= 'z')
-                    letter = static_cast<char>(letter - 'a' + 'A');
+                    letter = std::toupper(letter, std::locale::classic());
                 else if (!(letter >= 'A' && letter <= 'Z') && !(letter >= '0' && letter <= '9') && letter != '-')
                     throw std::invalid_argument("Invalid character in symbol: " + symbol);
             }
@@ -100,6 +105,20 @@ namespace
 
     std::vector<std::string> subscription_requests(const app_config& config)
     {
+        // Local aliases map to tickers/trades/books. books gives a 400-level snapshot then 100 ms diffs;
+        // it provides public depth without the access requirements of books-l2-tbt.
+        // https://www.okx.com/docs-v5/en/#order-book-trading-market-data-ws-order-book-channel
+        // trades may combine matches (count identifies aggregation); do not assume one fill per record.
+        // https://www.okx.com/docs-v5/en/#order-book-trading-market-data-ws-trades-channel
+        // Batch channel/instrument pairs on one connection, e.g. the depth-only request:
+        // {"op":"subscribe","args":[{"channel":"books","instId":"BTC-USDT"}]}
+        // https://www.okx.com/docs-v5/en/#overview-websocket-subscribe
+        // Limits: subscribe/unsubscribe/login share 480 requests/hour per connection; many args in one
+        // command consume one request. The separate 3/s/IP limit is for connection attempts, not batches.
+        // https://www.okx.com/docs-v5/en/#overview-websocket-connect
+        // For many 50/400-level books, OKX recommends fewer than 30 channels per connection (see books
+        // docs above). This example does not enforce that recommendation or distribute subscriptions.
+        // It sends one batch, rejects oversized requests, and has no hourly budget or rate limiter.
         std::string request = R"({"op":"subscribe","args":[)";
         bool first = true;
         for (const auto& symbol : config.symbols)
@@ -114,6 +133,7 @@ namespace
             }
         }
         request += "]}";
+        // The documented channel-list bound is 64 KB; include the JSON envelope in our size check too.
         if (request.size() > 64 * 1024)
             throw std::invalid_argument("The subscription request exceeds OKX's 64 KiB limit");
         return {request};
@@ -166,6 +186,8 @@ namespace
 
         void operator()(nom::web_socket& connection, const nom::event::on_connected&)
         {
+            // Connect -> subscribe -> event:"subscribe" per arg (or event:"error") -> data + text heartbeat.
+            // send() confirms a local write; this raw logger does not validate subscription acknowledgements.
             LINFO("Connected: {}", connection.session_id());
             for (const auto& request : requests_)
             {
@@ -182,6 +204,15 @@ namespace
 
         void operator()(nom::web_socket& connection, const nom::event::ws_data& event)
         {
+            // Selected fields with illustrative values; arg identifies the channel/instrument:
+            // {"arg":{"channel":"tickers","instId":"BTC-USDT"},"data":[{"last":"60000","bidPx":"59999"}]}
+            // {"arg":{"channel":"trades","instId":"BTC-USDT"},"data":[{"px":"60000","sz":"0.01","count":"1"}]}
+            // {"arg":{"channel":"books","instId":"BTC-USDT"},"action":"snapshot",
+            //   "data":[{"seqId":10,"prevSeqId":-1,"bids":[["60000","1","0","2"]],"asks":[]}]}
+            // https://www.okx.com/docs-v5/en/#order-book-trading-market-data-ws-tickers-channel
+            // books later uses action:"update". A book consumer must apply levels and follow seqId/prevSeqId
+            // continuity rules (including resets); this example just relays payloads, acks, errors and pong.
+            // Full depth tuples and sequence rules: the order-book link beside subscription_requests().
             nom::relay<Traits>::pass_response(
                 this,
                 nom::event::market_data{.ts = event.ts, .source = connection.session_id(), .data = event.sv_data()});
@@ -189,6 +220,8 @@ namespace
 
         void operator()(nom::web_socket&, const nom::event::on_disconnected& event)
         {
+            // Stop also cancels the application heartbeat. A reconnecting consumer must resubscribe and
+            // establish a new snapshot; this capture example exits instead of hiding a gap in received data.
             LWARN("Disconnected: {}", event.reason);
             on_request(nom::event::service_command::stop);
         }
@@ -200,7 +233,10 @@ namespace
         }
 
     private:
-        // OKX uses text ping/pong, separate from WebSocket control frames.
+        // OKX prescribes text ping after receive silence of N < 30 s, then checking for pong within N.
+        // This example uses a simpler fixed 20 s schedule and the client's receive-idle monitor; it does
+        // not match each pong to a deadline. Control Ping/Pong cannot replace these application messages.
+        // https://www.okx.com/docs-v5/en/#overview-websocket-connect
         void start_ping_timer()
         {
             ping_timer_.expires_after(std::chrono::seconds(20));

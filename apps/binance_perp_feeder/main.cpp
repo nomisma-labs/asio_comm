@@ -37,8 +37,18 @@ namespace
 {
     struct app_config
     {
+        // USD-M public streaming route: one connection carries all selected symbols/channels.
+        // https://developers.binance.com/en/docs/products/derivatives-trading-usds-futures/websocket-market-streams/Connect
         std::string endpoint{"wss://fstream.binance.com/public/ws"};
+        // Uppercase defaults match displayed symbols; CLI input may use either case. subscription_request
+        // lowercases a copy for stream names (BTCUSDT -> btcusdt@trade), preserving bookTicker's case.
         std::vector<std::string> symbols{"BTCUSDT"};
+        // Request 100 ms depth diffs for finer updates than the default 250 ms cadence; more traffic,
+        // not a latency guarantee or a full snapshot. bookTicker supplies best quotes independently.
+        // https://developers.binance.com/en/docs/catalog/core-trading-derivatives-trading-usd-s-m-futures/api/ws-streams/public#diff-book-depth-streams
+        // Raw trade was observed on this route on 2026-10-31 (see README.md); it is absent from the
+        // published catalog below. Keep this evidence distinct from the documented aggTrade channel.
+        // https://developers.binance.com/en/docs/catalog/core-trading-derivatives-trading-usd-s-m-futures/api/ws-streams/market
         std::vector<std::string> channels{"bookTicker", "trade", "depth@100ms"};
         nom::log_config log{.level = nom::log_level::info};
     };
@@ -73,6 +83,16 @@ namespace
 
     std::string subscription_request(const app_config& config)
     {
+        // Multiplex lowercase symbol/channel pairs; id identifies the reply, not a market-data stream.
+        // {"method":"SUBSCRIBE","params":["btcusdt@bookTicker","btcusdt@trade","btcusdt@depth@100ms"],"id":1}
+        // /ws uses raw payloads; /stream would add a {"stream":...,"data":...} envelope.
+        // https://developers.binance.com/en/docs/products/derivatives-trading-usds-futures/websocket-market-streams/Live-Subscribing-Unsubscribing-to-streams
+        // Limits: 1024 active streams/connection and 10 client-to-server messages/s.
+        // https://developers.binance.com/en/docs/products/derivatives-trading-usds-futures/websocket-market-streams/Connect
+        // Check symbol-count * channel-count (341 symbols with the three default channels), without
+        // deduplication. All pairs go in one SUBSCRIBE; larger selections are rejected, not split.
+        // There is no rate limiter. For future batches, conservatively reserve room for control traffic;
+        // batching cannot bypass the connection's total active-stream limit.
         if (config.symbols.empty() || config.channels.empty())
             throw std::invalid_argument("Select at least one symbol and one channel");
         if (config.symbols.size() > 1024 / config.channels.size())
@@ -90,10 +110,11 @@ namespace
         {
             if (symbol.empty())
                 throw std::invalid_argument("Symbols must not be empty");
+            // This example accepts ASCII symbols; the classic locale keeps wire casing locale-independent.
             for (char& letter : symbol)
             {
                 if (letter >= 'A' && letter <= 'Z')
-                    letter = static_cast<char>(letter - 'A' + 'a');
+                    letter = std::tolower(letter, std::locale::classic());
                 else if (!(letter >= 'a' && letter <= 'z') && !(letter >= '0' && letter <= '9'))
                     throw std::invalid_argument("Symbols must contain only ASCII letters and digits");
             }
@@ -134,7 +155,9 @@ namespace
             : request_(subscription_request(config)),
               client_(nom::ctx(this).io.get_executor(), nom::url(config.endpoint))
         {
-            // Periodic client pings keep receive activity tracked on quiet subscriptions.
+            // Our client probes solicit Pongs for its receive-idle monitor on quiet subscriptions.
+            // This is an example policy, separate from Binance's server Ping every 3 min / 10 min Pong
+            // allowance (see Connect above). Beast still answers server Pings automatically while reading.
             auto params = client_.params();
             params.enable_outbound_ping = true;
             client_.update_params(params);
@@ -160,6 +183,8 @@ namespace
 
         void operator()(nom::web_socket& connection, const nom::event::on_connected&)
         {
+            // Workflow: connect -> SUBSCRIBE -> {"result":null,"id":1} or error -> continuous events.
+            // send() is local write completion; this example logs the ack without establishing readiness.
             LINFO("Connected: {}", connection.session_id());
             LINFO("Subscribing: {}", request_);
             if (!connection.send(request_))
@@ -171,6 +196,15 @@ namespace
 
         void operator()(nom::web_socket& connection, const nom::event::ws_data& event)
         {
+            // Selected fields with illustrative values; raw trade shape follows the observation in README.md:
+            // trade: {"e":"trade","s":"BTCUSDT","t":7,"p":"60000","q":"0.01","T":1700000000000}
+            // bookTicker: {"e":"bookTicker","s":"BTCUSDT","u":42,"b":"60000","B":"1","a":"60001","A":"2"}
+            // depth: {"e":"depthUpdate","s":"BTCUSDT","U":43,"u":44,"pu":42,"b":[["60000","0"]],"a":[]}
+            // Documented quote/depth fields:
+            // https://developers.binance.com/en/docs/catalog/core-trading-derivatives-trading-usd-s-m-futures/api/ws-streams/public
+            // To build a book, reconcile the REST snapshot and check pu against the previous u; quantities
+            // replace levels, and zero deletes. This logger neither reconciles nor validates ack/error payloads.
+            // https://developers.binance.com/en/docs/products/derivatives-trading-usds-futures/websocket-market-streams/How-to-manage-a-local-order-book-correctly
             nom::relay<Traits>::pass_response(
                 this,
                 nom::event::market_data{.ts = event.ts, .source = connection.session_id(), .data = event.sv_data()});
@@ -178,6 +212,8 @@ namespace
 
         void operator()(nom::web_socket&, const nom::event::on_disconnected& event)
         {
+            // The documented 24 h rotation also reaches here. A continuous service must reconnect,
+            // resubscribe and restore snapshots; this example stops so an interrupted capture is visible.
             LWARN("Disconnected: {}", event.reason);
             on_request(nom::event::service_command::stop);
         }

@@ -35,7 +35,11 @@ namespace nom::event
 
 struct app_config
 {
+    // exchangeInfo is a public request/reply method on the Spot WS API, not a /ws stream subscription.
+    // https://github.com/binance/binance-spot-api-docs/blob/master/web-socket-api.md#general-api-information
     std::string endpoint{"wss://ws-api.binance.com:443/ws-api/v3"};
+    // Explicit headroom for a whole symbol catalog in one message; 64 MiB is this app's budget,
+    // not an exchange requirement or an initial allocation. The socket receive buffer stays independent.
     unsigned max_message_size{64 * 1024 * 1024};
     nom::log_config log{.level = nom::log_level::info};
 };
@@ -65,6 +69,9 @@ app_config parse_arguments(int argc, char** argv)
 }
 
 // Only inspect the expected response fields; the payload remains opaque to the application.
+// This is basic error identification, not JSON/nesting/schema or request-ID validation.
+// Success uses status:200 with result; failures carry status and error:{code,msg}.
+// https://github.com/binance/binance-spot-api-docs/blob/master/web-socket-api.md#response-format
 std::string_view response_field(std::string_view data, std::string_view name) noexcept
 {
     const auto key = data.find(name);
@@ -140,6 +147,16 @@ public:
 
     void operator()(nom::web_socket& connection, const nom::event::on_connected&)
     {
+        // One-shot workflow: connect -> exchangeInfo -> result/error -> relay the result -> close.
+        // There is no subscription ack or update stream. send() success only confirms the local write;
+        // Beast continues reading (and answering server control Pings) until the response arrives.
+        // exchangeInfo costs 20 request weight; opening this WS API connection costs another 2.
+        // Weight is shared per IP across connections; rateLimits reports the applicable budgets.
+        // This is a request API, so the feeder's 1024-stream allowance does not apply.
+        // https://github.com/binance/binance-spot-api-docs/blob/master/web-socket-api.md#exchange-information
+        // https://github.com/binance/binance-spot-api-docs/blob/master/web-socket-api.md#ip-limits
+        // This tool sends once and exits on an API error; it does not track quotas or parse retryAfter.
+        // A caller repeating runs must honor 429/retryAfter and coordinate the shared IP budget.
         if (!connection.send(request_))
         {
             LERROR("exchangeInfo request send failed");
@@ -149,6 +166,13 @@ public:
 
     void operator()(nom::web_socket& connection, const nom::event::ws_data& event)
     {
+        // Illustrative response with selected fields; the full envelope is preserved on stdout:
+        // {"id":"exchange-info","status":200,"result":{"symbols":[{"symbol":"BTCUSDT","status":"TRADING",
+        //   "baseAsset":"BTC","quoteAsset":"USDT","filters":[{"filterType":"LOT_SIZE","stepSize":"0.00001"}]}]}}
+        // Filters specify allowed price/quantity steps; precision fields alone are not those trading rules.
+        // https://github.com/binance/binance-spot-api-docs/blob/master/web-socket-api.md#exchange-information
+        // https://github.com/binance/binance-spot-api-docs/blob/master/filters.md
+        // This single-request tool checks the envelope's error/status tokens, without constructing a symbol model.
         const auto error = response_error(event.sv_data());
         if (error.empty())
         {
@@ -175,6 +199,11 @@ public:
     }
 
 private:
+    // Omit symbol/symbols to fetch the catalog; permissions:["SPOT"] filters for Spot eligibility.
+    // showPermissionSets:false suppresses bulky permission-set contents while retaining trading filters.
+    // Omit symbolStatus so halted/non-trading symbols remain visible; consumers select tradable instruments.
+    // The fixed ID names this tool's sole outstanding request; it is not an authentication credential.
+    // https://github.com/binance/binance-spot-api-docs/blob/master/web-socket-api.md#exchange-information
     const std::string request_{
         R"({"id":"exchange-info","method":"exchangeInfo","params":{"permissions":["SPOT"],"showPermissionSets":false}})"};
     nom::web_socket client_;

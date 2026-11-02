@@ -29,6 +29,8 @@ int main(int argc, char** argv)
     {
         nom::init_logger(nom::main_logger);
         boost::asio::io_context io;
+        // This generic probe sends at most one application message and closes after the first reply.
+        // It has no exchange subscription/count/rate policy; consult the selected endpoint's API docs.
         const char* endpoint = argc > 1 ? argv[1] : "wss://ws.postman-echo.com/raw";
         const char* message = argc == 1 ? "hello" : (argc == 3 ? argv[2] : nullptr);
         nom::web_socket client(io.get_executor(), nom::url(endpoint));

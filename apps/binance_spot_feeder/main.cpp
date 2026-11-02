@@ -37,8 +37,15 @@ namespace
 {
     struct app_config
     {
+        // Public streaming endpoint; /ws delivers unwrapped events for all subscribed streams.
+        // https://github.com/binance/binance-spot-api-docs/blob/master/web-socket-streams.md#general-wss-information
         std::string endpoint{"wss://stream.binance.com:443/ws"};
+        // Uppercase defaults match displayed symbols; CLI input may use either case. subscription_request
+        // lowercases a copy for stream names (BTCUSDT -> btcusdt@trade), preserving bookTicker's case.
         std::vector<std::string> symbols{"BTCUSDT"};
+        // bookTicker = best quotes; trade = individual executions. depth@100ms selects faster
+        // diff delivery than depth's 1000 ms default, at the cost of more traffic; it is not a snapshot.
+        // https://github.com/binance/binance-spot-api-docs/blob/master/web-socket-streams.md#diff-depth-stream
         std::vector<std::string> channels{"bookTicker", "trade", "depth@100ms"};
         nom::log_config log{.level = nom::log_level::info};
     };
@@ -73,6 +80,15 @@ namespace
 
     std::string subscription_request(const app_config& config)
     {
+        // One connection, lowercase symbol names, case-sensitive channels, one correlation ID:
+        // {"method":"SUBSCRIBE","params":["btcusdt@bookTicker","btcusdt@trade","btcusdt@depth@100ms"],"id":1}
+        // https://github.com/binance/binance-spot-api-docs/blob/master/web-socket-streams.md#live-subscribingunsubscribing-to-streams
+        // Limits: 1024 active streams/connection; 5 client-to-server messages/s, including JSON commands
+        // and control Ping/Pong frames. A multi-stream SUBSCRIBE is one command; leave room for Pongs.
+        // https://github.com/binance/binance-spot-api-docs/blob/master/web-socket-streams.md#websocket-limits
+        // Check symbol-count * channel-count (341 symbols with the three default channels). Entries are
+        // not deduplicated. Send one batch; reject excess streams rather than split across connections.
+        // There is no rate limiter; splitting commands would not increase the active-stream allowance.
         if (config.symbols.empty() || config.channels.empty())
             throw std::invalid_argument("Select at least one symbol and one channel");
         if (config.symbols.size() > 1024 / config.channels.size())
@@ -90,10 +106,11 @@ namespace
         {
             if (symbol.empty())
                 throw std::invalid_argument("Symbols must not be empty");
+            // This example accepts ASCII symbols; the classic locale keeps wire casing locale-independent.
             for (char& letter : symbol)
             {
                 if (letter >= 'A' && letter <= 'Z')
-                    letter = static_cast<char>(letter - 'A' + 'a');
+                    letter = std::tolower(letter, std::locale::classic());
                 else if (!(letter >= 'a' && letter <= 'z') && !(letter >= '0' && letter <= '9'))
                     throw std::invalid_argument("Symbols must contain only ASCII letters and digits");
             }
@@ -156,6 +173,8 @@ namespace
 
         void operator()(nom::web_socket& connection, const nom::event::on_connected&)
         {
+            // Workflow: connect -> SUBSCRIBE -> {"result":null,"id":1} or error -> continuous data.
+            // send() confirms the local write only; this logger forwards replies without validating the ack.
             LINFO("Connected: {}", connection.session_id());
             LINFO("Subscribing: {}", request_);
             if (!connection.send(request_))
@@ -167,6 +186,15 @@ namespace
 
         void operator()(nom::web_socket& connection, const nom::event::ws_data& event)
         {
+            // Illustrative data, selected fields only (prices/quantities are decimal strings):
+            // trade: {"e":"trade","s":"BTCUSDT","t":7,"p":"60000","q":"0.01"}
+            // bookTicker: {"u":42,"s":"BTCUSDT","b":"60000","B":"1","a":"60001","A":"2"}
+            // depth: {"e":"depthUpdate","s":"BTCUSDT","U":43,"u":44,"b":[["60000","0"]],"a":[]}
+            // https://github.com/binance/binance-spot-api-docs/blob/master/web-socket-streams.md#trade-streams
+            // https://github.com/binance/binance-spot-api-docs/blob/master/web-socket-streams.md#individual-symbol-book-ticker-streams
+            // A book consumer must reconcile a snapshot with U/u and apply absolute quantities (zero deletes).
+            // https://github.com/binance/binance-spot-api-docs/blob/master/web-socket-streams.md#how-to-manage-a-local-order-book-correctly
+            // This capture example forwards all payloads, including acknowledgements/errors, without parsing.
             nom::relay<Traits>::pass_response(
                 this,
                 nom::event::market_data{.ts = event.ts, .source = connection.session_id(), .data = event.sv_data()});
@@ -174,6 +202,9 @@ namespace
 
         void operator()(nom::web_socket&, const nom::event::on_disconnected& event)
         {
+            // While reading, Beast answers server control Pings automatically; no application ping is needed.
+            // Binance rotates connections after 24 h. This example exits; a continuous service must reconnect,
+            // resubscribe and restore book state. Connection rules are linked beside app_config::endpoint.
             LWARN("Disconnected: {}", event.reason);
             on_request(nom::event::service_command::stop);
         }

@@ -37,7 +37,12 @@ namespace
 {
     struct app_config
     {
+        // Production JSON-RPC WebSocket; these public channels need no credentials.
+        // BTC-PERPETUAL is the example inverse perpetual instrument, not a Spot symbol.
+        // https://docs.deribit.com/articles/deribit-quickstart
         std::string endpoint{"wss://www.deribit.com/ws/api/v2"};
+        // CLI symbols may use either case; validate_config normalizes the instrument to uppercase
+        // (btc-perpetual -> BTC-PERPETUAL). Channel prefixes/suffixes stay lowercase, e.g. book.*.100ms.
         std::vector<std::string> symbols{"BTC-PERPETUAL"};
         std::vector<std::string> channels{"ticker", "trade", "depth"};
         nom::log_config log{.level = nom::log_level::info};
@@ -84,10 +89,11 @@ namespace
         {
             if (symbol.empty())
                 throw std::invalid_argument("Symbols must not be empty");
+            // This example accepts ASCII identifiers; the classic locale fixes their wire casing.
             for (char& letter : symbol)
             {
                 if (letter >= 'a' && letter <= 'z')
-                    letter = static_cast<char>(letter - 'a' + 'A');
+                    letter = std::toupper(letter, std::locale::classic());
                 else if (!(letter >= 'A' && letter <= 'Z') && !(letter >= '0' && letter <= '9') && letter != '-' &&
                          letter != '_')
                     throw std::invalid_argument("Invalid character in symbol: " + symbol);
@@ -99,8 +105,24 @@ namespace
 
     std::vector<std::string> subscription_requests(const app_config& config)
     {
+        // Deribit documents up to 500 channels per subscription message, not per connection.
+        // This example sends one message and rejects larger selections instead of splitting them into batches.
+        // https://docs.deribit.com/articles/market-data-collection-best-practices#batch-your-subscription-requests
+        // Count symbol/channel pairs: three default channels allow 166 symbols in this single batch.
+        // The published public/subscribe budget is about 3.3 requests/s sustained with a 10-request burst;
+        // it has a separate limit from ordinary API methods. This example has no pacing/rate limiter.
+        // Future batches must respect both the 500-channel message bound and the subscription budget.
+        // https://docs.deribit.com/articles/rate-limits
         if (config.symbols.size() > 500 / config.channels.size())
             throw std::invalid_argument("Select at most 500 channel/symbol subscriptions");
+        // Batch channels in one JSON-RPC call; id correlates its acknowledgement. Depth-only example:
+        // {"jsonrpc":"2.0","id":1,"method":"public/subscribe","params":{"channels":["book.BTC-PERPETUAL.100ms"]}}
+        // https://docs.deribit.com/api-reference/subscription-management/public-subscribe
+        // 100ms selects public batched updates without credentials; raw requires authentication.
+        // ticker/trade/depth map to ticker/trades/book, respectively; trades carries a batch of records.
+        // https://docs.deribit.com/subscriptions/market-data/tickerinstrument_nameinterval
+        // https://docs.deribit.com/subscriptions/trades/tradesinstrument_nameinterval
+        // https://docs.deribit.com/subscriptions/orderbook/bookinstrument_nameinterval
         std::string request = R"({"jsonrpc":"2.0","id":1,"method":"public/subscribe","params":{"channels":[)";
         bool first = true;
         for (const auto& symbol : config.symbols)
@@ -142,6 +164,10 @@ namespace
             : requests_(subscription_requests(config)),
               client_(nom::ctx(this).io.get_executor(), nom::url(config.endpoint))
         {
+            // Control probes support our receive-idle monitor on quiet feeds. We do not enable
+            // public/set_heartbeat: that separate application protocol requires public/test replies
+            // to test_request notifications, which control Pongs cannot satisfy.
+            // https://docs.deribit.com/api-reference/session-management/public-set_heartbeat
             auto params = client_.params();
             params.enable_outbound_ping = true;
             client_.update_params(params);
@@ -167,6 +193,8 @@ namespace
 
         void operator()(nom::web_socket& connection, const nom::event::on_connected&)
         {
+            // Connect -> public/subscribe -> id:1 result:[accepted channels] or error -> notifications.
+            // send() only completes the local write; this logger does not verify the accepted channel list.
             LINFO("Connected: {}", connection.session_id());
             for (const auto& request : requests_)
             {
@@ -182,6 +210,16 @@ namespace
 
         void operator()(nom::web_socket& connection, const nom::event::ws_data& event)
         {
+            // Subscription envelope (selected fields, illustrative values):
+            // {"jsonrpc":"2.0","method":"subscription","params":{"channel":"book.BTC-PERPETUAL.100ms",
+            //   "data":{"type":"snapshot","change_id":10,"bids":[["new",60000,20]],"asks":[]}}}
+            // https://docs.deribit.com/articles/notifications
+            // Later book data has type:"change", prev_change_id and [new/change/delete,price,amount] tuples.
+            // Consumers must match prev_change_id to the last change_id and recover a snapshot after gaps.
+            // ticker data is an object, e.g. {"instrument_name":"BTC-PERPETUAL","best_bid_price":60000}.
+            // trades data is an array, e.g. [{"trade_id":"7","price":60000,"amount":20,"direction":"buy"}].
+            // Channel schemas are linked beside subscription_requests(); amount units depend on the contract.
+            // This raw logger also forwards RPC replies/errors and does not reconstruct or validate a book.
             nom::relay<Traits>::pass_response(
                 this,
                 nom::event::market_data{.ts = event.ts, .source = connection.session_id(), .data = event.sv_data()});
@@ -189,6 +227,8 @@ namespace
 
         void operator()(nom::web_socket&, const nom::event::on_disconnected& event)
         {
+            // Subscriptions belong to this connection. A continuous consumer would reconnect, confirm its
+            // subscriptions and rebuild from the new snapshot; this example reports the interruption and exits.
             LWARN("Disconnected: {}", event.reason);
             on_request(nom::event::service_command::stop);
         }

@@ -37,7 +37,12 @@ namespace
 {
     struct app_config
     {
+        // Use the same raw /ws protocol as binance_spot_feeder; trade gives one event per execution
+        // for this receive-callback test. The second request adds ETHUSDT on the existing connection.
+        // https://github.com/binance/binance-spot-api-docs/blob/master/web-socket-streams.md#trade-streams
         std::string endpoint{"wss://stream.binance.com:443/ws"};
+        // Both symbol lists use conventional uppercase defaults; normalized_symbol converts copies to
+        // lowercase stream names (ETHUSDT -> ethusdt@trade), leaving channel names case-sensitive.
         std::vector<std::string> symbols{"BTCUSDT"};
         std::vector<std::string> channels{"trade"};
         unsigned resubscribe_after_messages{3};
@@ -89,10 +94,12 @@ namespace
     {
         if (symbol.empty())
             throw std::invalid_argument("Symbols must not be empty");
+        // Use the same normalized spelling for subscription requests and duplicate-symbol counting.
+        // The classic locale fixes case conversion for the ASCII symbols accepted by this example.
         for (char& letter : symbol)
         {
             if (letter >= 'A' && letter <= 'Z')
-                letter = static_cast<char>(letter - 'A' + 'a');
+                letter = std::tolower(letter, std::locale::classic());
             else if (!(letter >= 'a' && letter <= 'z') && !(letter >= '0' && letter <= '9'))
                 throw std::invalid_argument("Symbols must contain only ASCII letters and digits");
         }
@@ -101,6 +108,16 @@ namespace
 
     std::string subscription_request(const app_config& config, unsigned id)
     {
+        // Initial: {"method":"SUBSCRIBE","params":["btcusdt@trade"],"id":1}.
+        // Follow-up: {"method":"SUBSCRIBE","params":["ethusdt@trade"],"id":2}; SUBSCRIBE adds streams.
+        // IDs distinguish replies; removing BTC would require a separate UNSUBSCRIBE.
+        // https://github.com/binance/binance-spot-api-docs/blob/master/web-socket-streams.md#live-subscribingunsubscribing-to-streams
+        // Other supported channel choices and depth cadence are explained in binance_spot_feeder/main.cpp.
+        // Limits: 1024 active streams/connection; 5 client-to-server messages/s, counting JSON commands
+        // and control Ping/Pong frames. Each subscription below is one command, regardless of symbol count.
+        // https://github.com/binance/binance-spot-api-docs/blob/master/web-socket-streams.md#websocket-limits
+        // Check each request here and the cumulative stream count in resubscription_request().
+        // Neither request is split into batches; this diagnostic has no rate limiter.
         if (config.symbols.empty() || config.channels.empty())
             throw std::invalid_argument("Select at least one symbol and one channel");
         if (config.symbols.size() > 1024 / config.channels.size())
@@ -140,6 +157,8 @@ namespace
         auto next = config;
         next.symbols = config.resubscribe_symbols;
         auto request = subscription_request(next, 2);
+        // SUBSCRIBE adds to the existing selection. Count the normalized symbol union across both
+        // requests, multiplied by the shared channel count; repeated channel entries count conservatively.
         std::set<std::string> symbols;
         for (const auto& symbol : config.symbols)
             symbols.insert(normalized_symbol(symbol));
@@ -197,6 +216,8 @@ namespace
 
         void operator()(nom::web_socket& connection, const nom::event::on_connected&)
         {
+            // Connect -> initial subscription -> data -> second subscription inside the Nth data callback.
+            // Replies are logged, not used as gates; a successful local send is not Binance's acknowledgement.
             LINFO("Connected: {}", connection.session_id());
             LINFO("Subscribing: {}", request_);
             if (!connection.send(request_))
@@ -212,7 +233,10 @@ namespace
                 this,
                 nom::event::market_data{.ts = event.ts, .source = connection.session_id(), .data = event.sv_data()});
 
-            // Supported market-data messages contain a symbol field; subscription replies do not.
+            // Example trade (selected fields): {"e":"trade","s":"BTCUSDT","t":7,"p":"60000","q":"0.01"}.
+            // Acks are {"result":null,"id":1} or id:2; exclude them from the trigger count.
+            // This string check is specific to the supported raw messages, not a general JSON classifier.
+            // N received updates trigger exactly one extra send; N is not a time-based rate budget.
             if (remaining_messages_ != 0 && event.sv_data().find("\"s\"") != std::string_view::npos &&
                 --remaining_messages_ == 0)
             {
@@ -229,6 +253,8 @@ namespace
 
         void operator()(nom::web_socket&, const nom::event::on_disconnected& event)
         {
+            // Beast handles server control Pings while reading. End the diagnostic on disconnection;
+            // reconnecting would start a different session and would not extend this re-entry experiment.
             LWARN("Disconnected: {}", event.reason);
             on_request(nom::event::service_command::stop);
         }

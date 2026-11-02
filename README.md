@@ -14,22 +14,8 @@ WebSocket and logging/relay examples.
 
 ## Example applications
 
-- [Binance Spot feeder](apps/binance_spot_feeder/README.md): subscribe to best bid/ask, individual trades and depth
-  streams for selected symbols and log incoming messages.
-- [Binance Spot resubscription test](apps/binance_spot_resubscribe_test/README.md): exercise a
-  subscription change directly from a receive callback on one connection.
-- [Binance Spot symbol provider](apps/binance_spot_symbol_provider/README.md): fetch complete Spot
-  exchange information once over WebSocket and output its JSON response.
-- [Binance perpetual futures feeder](apps/binance_perp_feeder/README.md): log USDⓈ-M best bid/ask,
-  individual trades and depth streams on one connection.
-- [Bitflyer Spot feeder](apps/bitflyer_spot_feeder/README.md): log ticker, executions and board data.
-- [Deribit perpetual futures feeder](apps/deribit_perp_feeder/README.md): log public ticker,
-  trades and order-book updates.
-- [OKX Spot feeder](apps/okex_spot_feeder/README.md): log ticker, trades and depth with text heartbeats.
-- [WebSocket example](apps/web_socket_example/README.md): connect, send a message and print a reply;
-  includes client setup and parameter examples.
-- [Logging and relay example](apps/asio_comm_example/README.md): configure logging in C++
-  and run an Assembly relay workflow.
+See the [application overview](apps/README.md) for market-data feeders, symbol providers,
+exchange hosting information, and links to each example's build and usage instructions.
 
 ## Build
 

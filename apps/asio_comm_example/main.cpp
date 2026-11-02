@@ -63,6 +63,7 @@ namespace example
 
 int main()
 {
+    // Local logging/relay example: no network connection or exchange subscription limits apply.
     try
     {
         const example::app_config config;
