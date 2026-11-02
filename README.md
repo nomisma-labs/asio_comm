@@ -3,7 +3,7 @@
 <!-- repo-description:begin -->
 `asio_comm` will provide C++ implementations of WebSocket, HTTP and other communication
 protocols, initially for connectivity to cryptocurrency exchanges. The repository contains an
-initial TLS WebSocket client, public exchange market-data feeders, a Spot symbol provider, and
+initial TLS WebSocket client, public exchange market-data feeders, WebSocket symbol providers, and
 WebSocket and logging/relay examples.
 <!-- repo-description:end -->
 
@@ -38,7 +38,8 @@ application composition and event routing.
 
 The WebSocket client also uses Boost.Asio/Beast and OpenSSL. Install the OpenSSL development
 package and a system CA certificate bundle; the loopback integration test also uses the
-`openssl` command-line tool and Python's standard library.
+`openssl` command-line tool and Python's standard library. The HTX feeder additionally needs the
+zlib development package to handle compressed application heartbeats.
 
 | Repository | Pin |
 |---|---|

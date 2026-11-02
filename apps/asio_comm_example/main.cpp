@@ -8,14 +8,10 @@ import std;
 import nom.assembly;
 import nom.spd_logger;
 
+#include "config.h"
+
 namespace example
 {
-    struct app_config
-    {
-        std::string_view app_name{"asio_comm_example"};
-        std::string_view message{"Hello from asio_comm"};
-        nom::log_config log{.level = nom::log_level::info};
-    };
 
     // Relay calls are synchronous; these borrowed values outlive the whole workflow.
     struct start_app
@@ -67,6 +63,11 @@ int main()
     try
     {
         const example::app_config config;
+        if (const auto result = config.validate(); !result)
+        {
+            std::cerr << result.error() << '\n';
+            return 1;
+        }
         nom::init_logger(nom::main_logger, config.log);
         nom::relay<example::app_assembly> workflow;
         workflow.request(example::start_app{config});

@@ -110,7 +110,7 @@ Broader exception guarantees remain in [WS-08](#ws-08). Detailed behavior is in 
 possible operation overlap is safe. HTTP-side observations do not establish a WebSocket defect.
 
 **Evidence:** the standalone
-[Binance Spot resubscription test](../../apps/binance_spot_resubscribe_test/README.md) adds
+[Binance Spot resubscription test](../../apps/binance/binance_spot_resubscribe_test/README.md) adds
 ETHUSDT from the Nth BTCUSDT market-data callback on one connection. The local TLS peer verifies
 exact timing at N=1/3/100, exclusion of acknowledgements from the count, ID 2 acknowledgement,
 and continued data for both symbols. Fragmented input, interleaved pings, and a ping buffered
@@ -196,7 +196,7 @@ See [Beast's size contract](https://www.boost.org/doc/libs/latest/libs/beast/doc
 **Implemented:** `ws_params::max_message_size` is a positive unsigned incoming-message byte limit,
 defaulting to 16 MiB and applied before upgrade on every attempt. Zero is rejected; the
 socket-buffer settings remain independent. The
-[Spot symbol provider](../../apps/binance_spot_symbol_provider/README.md) requests Spot
+[Spot symbol provider](../../apps/binance/binance_spot_symbol_provider/README.md) requests Spot
 metadata, selects a bounded 64 MiB limit, checks for API errors with basic string searches,
 and relays its original response before closing. It sets `showPermissionSets:false` to suppress
 unneeded permission-set contents while retaining trading filters and other symbol metadata.

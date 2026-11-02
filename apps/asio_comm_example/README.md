@@ -28,7 +28,7 @@ returns. The warning and error are demonstrations; the app exits successfully.
 
 ## Configuration
 
-Settings are plain C++ values in `app_config`; edit them in `main.cpp` and rebuild:
+Settings are plain C++ values in `app_config`; edit [config.h](config.h) and rebuild:
 
 ```cpp
 struct app_config
@@ -39,7 +39,8 @@ struct app_config
 };
 ```
 
-`main()` passes `config.log` to `nom::init_logger`. The example takes no command-line options
+`app_config::validate() const` returns `std::expected<void, std::string>` without changing the settings.
+`main()` checks that result, then passes `config.log` to `nom::init_logger`. The example takes no command-line options
 and does not load configuration files.
 
 ## Validation

@@ -87,3 +87,41 @@ if(nom_build_tests AND TARGET asio_comm_example)
         LABELS integration
         PASS_REGULAR_EXPRESSION "asio_comm_example finished")
 endif()
+
+if(nom_build_tests)
+    set(exchange_app_args)
+    foreach(app_target IN ITEMS
+        binance_spot_sbe_feeder
+        bitget_spot_feeder
+        bybit_spot_feeder
+        coinbase_spot_feeder
+        coinbase_spot_symbol_provider
+        crypto_com_spot_feeder
+        deribit_perp_symbol_provider
+        gate_spot_feeder
+        htx_spot_feeder
+        hyperliquid_perp_feeder
+        hyperliquid_perp_symbol_provider
+        hyperliquid_spot_feeder
+        hyperliquid_spot_symbol_provider
+        kraken_spot_feeder
+        kraken_spot_symbol_provider
+        kucoin_spot_feeder
+        lbank_spot_feeder
+        mexc_spot_feeder
+        upbit_spot_feeder
+        xt_spot_feeder
+    )
+        if(TARGET ${app_target})
+            list(APPEND exchange_app_args --client $<TARGET_FILE:${app_target}>)
+        endif()
+    endforeach()
+    if(exchange_app_args)
+        find_package(Python 3.10 REQUIRED COMPONENTS Interpreter)
+        find_program(openssl_executable openssl REQUIRED)
+        add_test(NAME ${PROJECT_NAME}_exchange_apps
+            COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/web_socket/exchange_apps_test.py
+                --openssl ${openssl_executable} ${exchange_app_args})
+        set_tests_properties(${PROJECT_NAME}_exchange_apps PROPERTIES LABELS integration TIMEOUT 90)
+    endif()
+endif()

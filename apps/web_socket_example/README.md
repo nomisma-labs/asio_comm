@@ -23,6 +23,9 @@ It exits with status 1 on failure. TLS verifies both the
 certificate chain and hostname; a private CA can be supplied
 using OpenSSL's `SSL_CERT_FILE` environment variable.
 
+Defaults and argument parsing live in [config.h](config.h). `app_config::validate() const` returns
+`std::expected<void, std::string>`; `main()` reports invalid settings before constructing the client.
+
 ## Using the client
 
 The client has a [module interface](../../core/asio_comm/web_socket.cppm) and a private

@@ -228,7 +228,7 @@ teardown begins. Zero is rejected rather than
 requesting the backend's unlimited mode. This setting does not limit outgoing messages or total
 process memory, and the receive buffer can retain allocated capacity after consuming a message.
 See [Beast's message-size option](https://www.boost.org/doc/libs/latest/libs/beast/doc/html/beast/ref/boost__beast__websocket__stream/read_message_max/overload1.html)
-and the [Spot symbol provider](../apps/binance_spot_symbol_provider/README.md).
+and the [Spot symbol provider](../apps/binance/binance_spot_symbol_provider/README.md).
 
 ### Connection completions
 

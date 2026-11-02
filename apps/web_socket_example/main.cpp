@@ -14,6 +14,8 @@ import std;
 import nom.asio_comm;
 import nom.spd_logger;
 
+#include "config.h"
+
 int main(int argc, char** argv)
 {
     if (argc > 3 || (argc > 1 && std::string_view(argv[1]) == "--help"))
@@ -27,13 +29,17 @@ int main(int argc, char** argv)
 
     try
     {
+        const auto config = parse_arguments(argc, argv);
+        if (const auto validation = config.validate(); !validation)
+        {
+            std::cerr << validation.error() << '\n';
+            return 1;
+        }
         nom::init_logger(nom::main_logger);
         boost::asio::io_context io;
         // This generic probe sends at most one application message and closes after the first reply.
         // It has no exchange subscription/count/rate policy; consult the selected endpoint's API docs.
-        const char* endpoint = argc > 1 ? argv[1] : "wss://ws.postman-echo.com/raw";
-        const char* message = argc == 1 ? "hello" : (argc == 3 ? argv[2] : nullptr);
-        nom::web_socket client(io.get_executor(), nom::url(endpoint));
+        nom::web_socket client(io.get_executor(), nom::url(config.endpoint));
         int result = 1;
 
         // One io_context thread serializes the client and its callbacks.
@@ -44,7 +50,7 @@ int main(int argc, char** argv)
                 if constexpr (std::same_as<event_type, nom::event::on_connected>)
                 {
                     std::cout << "Connected: " << connection.session_id() << '\n';
-                    if (message && !connection.send(message))
+                    if (config.message && !connection.send(*config.message))
                     {
                         std::cerr << "Send failed\n";
                         client.close();
