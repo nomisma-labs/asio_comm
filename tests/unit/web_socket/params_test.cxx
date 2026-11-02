@@ -52,19 +52,19 @@ TEST_CASE("WebSocket parameter validation checks numeric bounds")
         params.socket_recv_buf_size = max_buffer;
         CHECK(params.validate().has_value());
     }
-    // Setup timeout and idle timeout have no required ordering.
+    // Setup timeout and receive watchdog timeout have no required ordering.
     params.receive_watchdog = nom::ws_params::receive_data_watchdog{.timeout_sec = 60};
     CHECK(params.validate().has_value());
 }
 
-TEST_CASE("Ping policies validate independently of idle monitoring")
+TEST_CASE("Ping policies validate independently of receive watchdog monitoring")
 {
     nom::ws_params params;
     CHECK_FALSE(params.passive_ping);
     CHECK_FALSE(params.active_ping);
-    for (const bool idle_enabled : {false, true})
+    for (const bool receive_watchdog_enabled : {false, true})
     {
-        if (idle_enabled)
+        if (receive_watchdog_enabled)
             params.receive_watchdog = nom::ws_params::receive_data_watchdog{.timeout_sec = 1};
         else
             params.receive_watchdog.reset();

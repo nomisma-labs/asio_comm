@@ -236,11 +236,11 @@ continues in WS-06.
 **Source TODOs covered:**
 
 - [`WS-PING`](web_socket.cppm) — Enforce passive Ping and active Pong deadlines.
-- [`WS-IDLE`](web_socket.cppm) — Review the idle timer and test it properly (perhaps with a local WebSocket server).
+- [`WS-IDLE`](web_socket.cppm) — Review the receive watchdog timer and test it properly (perhaps with a local WebSocket server).
 - [`WS-OP-TIMEOUT`](web_socket.cppm) — Review async operation timeouts; reproduce a case when a timeout is triggered.
 - [`WS-CONNECT-DEADLINE`](web_socket.cpp) — Make the connection procedure time-bound (we can use default_async_operation_timeout_sec for it).
 - [`WS-CABLE-LOSS`](web_socket.cppm) — Reproduce hard disconnection (unplug the network cable).
-- [`WS-INTERFACE-LOSS`](web_socket.cppm) — Reproduce Docker-based interface disconnection (a soft disconnection of a virtual interface may only be caught by the idle timer).
+- [`WS-INTERFACE-LOSS`](web_socket.cppm) — Reproduce Docker-based interface disconnection (a soft disconnection of a virtual interface may only be caught by the receive watchdog timer).
 - [`WS-PEER-CLOSE`](web_socket.cppm) — Reproduce normal server disconnection (e.g. Binance resets the MD connection once per day).
 
 Heartbeat research, exchange requirements, and interface options are in
@@ -282,7 +282,7 @@ to bound test execution, and the OKEx application heartbeat remains a protocol r
 The removal passed the GCC `complete` build and the unit, local TLS loopback, and exchange-feeder
 test suites. No new tests were added for this simplification.
 
-Relevant code: `on_control()`, `start_idle_timer()`, `on_idle_timer()`, ping handlers, and
+Relevant code: `on_control()`, `start_receive_watchdog_timer()`, `on_receive_watchdog_timer()`, ping handlers, and
 the resolve/connect/handshake chain.
 
 Current behavior confirmed by inspection:
@@ -425,7 +425,7 @@ Markdown/link and diff review.
 | --- | --- | --- |
 | [`WS-PARAMS`](web_socket.cppm) | Review parameter contracts and validation. | [WS-04](#ws-04) |
 | [`WS-PING`](web_socket.cppm) | Enforce passive Ping and active Pong deadlines. | [WS-06](#ws-06) |
-| [`WS-IDLE`](web_socket.cppm) | Review the idle timer and test it properly (perhaps with a local WebSocket server). | [WS-06](#ws-06) |
+| [`WS-IDLE`](web_socket.cppm) | Review the receive watchdog timer and test it properly (perhaps with a local WebSocket server). | [WS-06](#ws-06) |
 | [`WS-OP-TIMEOUT`](web_socket.cppm) | Review async operation timeouts; reproduce a case when a timeout is triggered. | [WS-06](#ws-06) |
 | [`WS-LARGE-MESSAGES`](web_socket.cppm) | Test sending and receiving really big messages (e.g. a huge Coinbase initial snapshot); distinguish socket buffers from message limits. | [WS-05](#ws-05) |
 | [`WS-INIT`](web_socket.cppm) | Introduce init (a session should start in init, not in disconnected). | [WS-02](#ws-02) |
@@ -433,7 +433,7 @@ Markdown/link and diff review.
 | [`WS-TERMINAL-FAILURE`](web_socket.cppm) | Make conn_failed terminal, on the same level as disconnected. | [WS-02](#ws-02) |
 | [`WS-DETACH`](web_socket.cppm) | Any terminal state (disconnected, conn_failed) should also be detached from the parent. | [WS-02](#ws-02); retired — retain the parent link and use terminal status. |
 | [`WS-CABLE-LOSS`](web_socket.cppm) | Reproduce hard disconnection (unplug the network cable). | [WS-06](#ws-06) |
-| [`WS-INTERFACE-LOSS`](web_socket.cppm) | Reproduce Docker-based interface disconnection (a soft disconnection of a virtual interface may only be caught by the idle timer). | [WS-06](#ws-06) |
+| [`WS-INTERFACE-LOSS`](web_socket.cppm) | Reproduce Docker-based interface disconnection (a soft disconnection of a virtual interface may only be caught by the receive watchdog timer). | [WS-06](#ws-06) |
 | [`WS-PEER-CLOSE`](web_socket.cppm) | Reproduce normal server disconnection (e.g. Binance resets the MD connection once per day). | [WS-06](#ws-06) |
 | [`WS-SEND-REENTRY`](web_socket.cpp) | Try sending from inside the ws_data receiver handler to reproduce re-entry into send. | [WS-03](#ws-03); closed — unconfirmed. |
 | [`WS-EXCEPTIONS`](web_socket.cppm) | Consider making the interface noexcept for everything except the constructor. | [WS-08](#ws-08) |

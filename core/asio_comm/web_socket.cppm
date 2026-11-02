@@ -90,7 +90,7 @@ export namespace nom
 
         // TODO IDs and stage definitions: ws_current_work.md.
         // TODO[WS-PING] (stage WS-06): Enforce passive Ping and active Pong deadlines.
-        // TODO[WS-IDLE] (stage WS-06): Review the idle timer and test it properly
+        // TODO[WS-IDLE] (stage WS-06): Review the receive watchdog timer and test it properly
         // (perhaps with a local WebSocket server).
         // TODO[WS-OP-TIMEOUT] (stage WS-06): Review async operation timeouts;
         // reproduce a case when a timeout is triggered.
@@ -135,7 +135,7 @@ export namespace nom
 
     // TODO[WS-CABLE-LOSS] (stage WS-06): Reproduce hard disconnection (unplug the network cable).
     // TODO[WS-INTERFACE-LOSS] (stage WS-06): Reproduce Docker-based interface disconnection
-    // (a soft disconnection of a virtual interface may only be caught by the idle timer).
+    // (a soft disconnection of a virtual interface may only be caught by the receive watchdog timer).
     // TODO[WS-PEER-CLOSE] (stage WS-06): Reproduce normal server disconnection
     // (e.g. Binance resets the MD connection once per day).
     // TODO[WS-EXCEPTIONS] (stage WS-08): Consider making the interface noexcept for everything

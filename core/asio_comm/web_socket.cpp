@@ -261,8 +261,8 @@ namespace nom
             }
             try
             {
-                if (idle_timer_)
-                    idle_timer_->cancel();
+                if (receive_watchdog_timer_)
+                    receive_watchdog_timer_->cancel();
             }
             catch (...)
             {
@@ -299,7 +299,7 @@ namespace nom
                 {
                     // Parameters are fixed for this attempt; disabled policies need no timer objects.
                     if (parent_->params_.receive_watchdog)
-                        idle_timer_.emplace(parent_->io_->executor);
+                        receive_watchdog_timer_.emplace(parent_->io_->executor);
                     if (parent_->params_.active_ping)
                         active_ping_timer_.emplace(parent_->io_->executor);
                     setup_ = std::make_unique<setup_state>(parent_->io_->executor);
@@ -582,8 +582,8 @@ namespace nom
                 stream_.control_callback(beast::bind_front_handler(&session::on_control, this));
 
                 stream_.async_read(buffer_, beast::bind_front_handler(&session::on_receive, shared_from_this()));
-                if (idle_timer_)
-                    start_idle_timer();
+                if (receive_watchdog_timer_)
+                    start_receive_watchdog_timer();
                 break;
             }
             case ws_status::conn_failed:
@@ -623,8 +623,8 @@ namespace nom
                 case websocket::frame_type::close:
                 {
                     LDEBUG("{} Close request received from server", id());
-                    if (idle_timer_)
-                        idle_timer_->cancel();
+                    if (receive_watchdog_timer_)
+                        receive_watchdog_timer_->cancel();
                     set_status<ws_status::disconnected>();
                     delegate_(
                         *parent_,
@@ -644,14 +644,15 @@ namespace nom
             }
         }
 
-        void start_idle_timer()
+        void start_receive_watchdog_timer()
         {
-            assert(idle_timer_ && parent_->params_.receive_watchdog);
-            const auto idle_timeout_sec = parent_->params_.receive_watchdog->timeout_sec;
-            const auto idle_timer_grace_period_sec = idle_timeout_sec / 2;
-            idle_timer_->expires_after(std::chrono::seconds{idle_timeout_sec} +
-                                       std::chrono::seconds{idle_timer_grace_period_sec});
-            idle_timer_->async_wait(beast::bind_front_handler(&session::on_idle_timer, shared_from_this()));
+            assert(receive_watchdog_timer_ && parent_->params_.receive_watchdog);
+            const auto receive_watchdog_timeout_sec = parent_->params_.receive_watchdog->timeout_sec;
+            const auto receive_watchdog_grace_period_sec = receive_watchdog_timeout_sec / 2;
+            receive_watchdog_timer_->expires_after(std::chrono::seconds{receive_watchdog_timeout_sec} +
+                                                   std::chrono::seconds{receive_watchdog_grace_period_sec});
+            receive_watchdog_timer_->async_wait(
+                beast::bind_front_handler(&session::on_receive_watchdog_timer, shared_from_this()));
         }
 
         void start_ping_timer()
@@ -722,42 +723,43 @@ namespace nom
             }
         }
 
-        void on_idle_timer(beast::error_code ec)
+        void on_receive_watchdog_timer(beast::error_code ec)
         {
             switch (status_)
             {
             case ws_status::connected:
             {
-                // on_handshake() started the idle timer; subsequent healthy expiries rearm it.
+                // on_handshake() started the receive watchdog timer; subsequent healthy expiries rearm it.
                 if (ec)
                 {
                     if (net::error::operation_aborted == ec)
                         break;
 
-                    LWARN("{} Idle timer error: {}", id(), ec.message());
+                    LWARN("{} Receive watchdog timer error: {}", id(), ec.message());
                     shutdown();
                     break;
                 }
 
                 assert(parent_->params_.receive_watchdog);
-                const auto idle_timeout_sec = parent_->params_.receive_watchdog->timeout_sec;
-                const auto idle_tolerance_sec = idle_timeout_sec / 5;
+                const auto receive_watchdog_timeout_sec = parent_->params_.receive_watchdog->timeout_sec;
+                const auto receive_watchdog_tolerance_sec = receive_watchdog_timeout_sec / 5;
 
                 const auto diff_ts =
                     std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - last_recv_ts_)
                         .count();
 
-                if (const bool is_idle_connection =
-                        std::chrono::seconds{diff_ts} >
-                        std::chrono::seconds{idle_timeout_sec} + std::chrono::seconds{idle_tolerance_sec};
-                    is_idle_connection)
+                if (const bool receive_watchdog_expired =
+                        std::chrono::seconds{diff_ts} > std::chrono::seconds{receive_watchdog_timeout_sec} +
+                                                            std::chrono::seconds{receive_watchdog_tolerance_sec};
+                    receive_watchdog_expired)
                 {
-                    LWARN("{} Idle timer expired: no tracked receive activity for {} seconds", id(), diff_ts);
+                    LWARN(
+                        "{} Receive watchdog timer expired: no tracked receive activity for {} seconds", id(), diff_ts);
                     shutdown();
                     break;
                 }
 
-                start_idle_timer();
+                start_receive_watchdog_timer();
                 break;
             }
             case ws_status::disconnecting:
@@ -768,8 +770,9 @@ namespace nom
                 // disconnected the session before this canceled or already queued wait completed.
                 break;
             default:
-                // The idle timer starts only after a successful handshake; sessions are never reused.
-                assert(false && "Idle timer completions require connected, disconnecting, or disconnected state");
+                // The receive watchdog timer starts only after a successful handshake; sessions are never reused.
+                assert(false &&
+                       "Receive watchdog timer completions require connected, disconnecting, or disconnected state");
                 LERROR("{} Unexpected state: {}", id(), enum_to_string(status_));
                 break;
             }
@@ -799,14 +802,14 @@ namespace nom
             {
             // on_handshake() set connected and started the read loop; no close has started since.
             case ws_status::connected:
-            // shutdown() (idle timer or write failure) ran before this read completion.
+            // shutdown() (receive watchdog timer or write failure) ran before this read completion.
             // A previous event::ws_data callback can also trigger shutdown(), then rearm the read below.
             case ws_status::disconnecting:
             {
                 if (ec)
                 {
-                    if (idle_timer_)
-                        idle_timer_->cancel();
+                    if (receive_watchdog_timer_)
+                        receive_watchdog_timer_->cancel();
                     set_status<ws_status::disconnected>();
                     delegate_(*parent_,
                               event::on_disconnected{.ts = std::chrono::steady_clock::now(),
@@ -877,8 +880,8 @@ namespace nom
             case ws_status::connected:
             {
                 set_status<ws_status::disconnecting>();
-                if (idle_timer_)
-                    idle_timer_->cancel();
+                if (receive_watchdog_timer_)
+                    receive_watchdog_timer_->cancel();
                 if (active_ping_timer_)
                     active_ping_timer_->cancel();
 
@@ -931,7 +934,7 @@ namespace nom
         websocket::stream<ws_tls_stream> stream_;
         beast::flat_buffer buffer_;
         network_timestamp last_recv_ts_{};
-        std::optional<net::steady_timer> idle_timer_;
+        std::optional<net::steady_timer> receive_watchdog_timer_;
         std::optional<net::steady_timer> active_ping_timer_;
     };
 

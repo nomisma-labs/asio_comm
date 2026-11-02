@@ -22,20 +22,22 @@ int main(int argc, char** argv)
     {
         nom::init_logger(nom::main_logger);
         const std::string_view mode(argv[2]);
-        const bool expect_idle_close = mode == "idle_only" || mode == "idle_with_ping";
-        if (!expect_idle_close && mode != "disabled" && mode != "disabled_with_ping" && mode != "independent")
+        const bool expect_receive_watchdog_close =
+            mode == "receive_watchdog_only" || mode == "receive_watchdog_with_ping";
+        if (!expect_receive_watchdog_close && mode != "disabled" && mode != "disabled_with_ping" &&
+            mode != "independent")
             return 1;
 
         boost::asio::io_context io;
         nom::web_socket client(io.get_executor(), nom::url(argv[1]));
         auto params = client.params();
-        if (expect_idle_close)
+        if (expect_receive_watchdog_close)
             params.receive_watchdog = nom::ws_params::receive_data_watchdog{.timeout_sec = 1};
         else if (mode == "independent")
             params.receive_watchdog = nom::ws_params::receive_data_watchdog{.timeout_sec = 5};
-        if (mode != "idle_only" && mode != "disabled")
+        if (mode != "receive_watchdog_only" && mode != "disabled")
             params.active_ping = nom::ws_params::client_ping_probe{
-                .ping_period_sec = mode == "idle_with_ping" ? 5u : 1u, .pong_timeout_sec = 1};
+                .ping_period_sec = mode == "receive_watchdog_with_ping" ? 5u : 1u, .pong_timeout_sec = 1};
         client.update_params(params);
 
         boost::asio::steady_timer deadline(io);
@@ -68,16 +70,16 @@ int main(int argc, char** argv)
                 {
                     ++disconnected;
                     const auto elapsed = event.ts - connected_at;
-                    if (!expect_idle_close || client.status() != nom::ws_status::disconnected ||
+                    if (!expect_receive_watchdog_close || client.status() != nom::ws_status::disconnected ||
                         elapsed < std::chrono::seconds(1) || elapsed >= std::chrono::seconds(5))
-                        fail("Unexpected disconnection or idle timing");
+                        fail("Unexpected disconnection or receive watchdog timing");
                     else
                         finish();
                 }
                 else if constexpr (std::same_as<event_type, nom::event::ws_data>)
                 {
-                    if (expect_idle_close || event.sv_data() != "accepted")
-                        fail("Unexpected message from idle test peer");
+                    if (expect_receive_watchdog_close || event.sv_data() != "accepted")
+                        fail("Unexpected message from receive watchdog test peer");
                     else
                     {
                         accepted = true;
@@ -94,12 +96,14 @@ int main(int argc, char** argv)
             [&](const boost::system::error_code& error)
             {
                 if (!error)
-                    fail("Idle test did not finish");
+                    fail("Receive watchdog test did not finish");
             });
         client.connect(callbacks);
         io.run();
-        return !failed && connected == 1 && (expect_idle_close ? disconnected == 1 : accepted && disconnected == 0) ? 0
-                                                                                                                    : 1;
+        return !failed && connected == 1 &&
+                       (expect_receive_watchdog_close ? disconnected == 1 : accepted && disconnected == 0)
+                   ? 0
+                   : 1;
     }
     catch (const std::exception& error)
     {

@@ -149,7 +149,7 @@ stateDiagram-v2
     state "Check elapsed time since last_recv_ts_" as IdleCheck
     state "Session: disconnecting" as Disconnecting
     state "Session: disconnected" as Disconnected
-    IdleWait --> IdleCheck : session.on_idle_timer
+    IdleWait --> IdleCheck : session.on_receive_watchdog_timer
     IdleCheck --> IdleWait : elapsed seconds at most N + floor(N / 5)
     IdleCheck --> Disconnecting : inactivity exceeds threshold / shutdown()
     IdleWait --> Disconnecting : idle timer error other than cancellation / shutdown()
@@ -184,7 +184,7 @@ once the session is disconnecting or disconnected.
   positive but have no runtime effect yet. This preparatory migration preserves the existing
   Ping behavior. Application heartbeats still reach the application as ordinary `ws_data`.
 
-Source entry points: `on_handshake`, `on_control`, `on_ping_timer`, `on_ping`, `on_idle_timer`,
+Source entry points: `on_handshake`, `on_control`, `on_ping_timer`, `on_ping`, `on_receive_watchdog_timer`,
 `on_receive`, `shutdown`, `on_shutdown`, and `close` in [web_socket.cpp](web_socket.cpp).
 Beast ownership is documented in [control-frame handling](https://www.boost.org/doc/libs/latest/libs/beast/doc/html/beast/using_websocket/control_frames.html)
 and [Ping write completion](https://www.boost.org/doc/libs/latest/libs/beast/doc/html/beast/ref/boost__beast__websocket__stream/async_ping.html).

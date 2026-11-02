@@ -335,7 +335,7 @@ checks whether the timer exists. Parameters can still be changed before the firs
   Other states assert, or log and return when assertions are disabled.
   The next interval starts when the send completes, without waiting for a pong. No timer is
   armed while that send is pending, so periodic ping sends cannot overlap.
-- **`IdleTimerDone(ec)`** — `on_idle_timer`: armed only when `receive_watchdog` is present,
+- **`IdleTimerDone(ec)`** — `on_receive_watchdog_timer`: armed only when `receive_watchdog` is present,
   scheduled for `timeout_sec` plus half of it (whole seconds; 30 seconds with the watchdog's
   default timeout), dispatched through `switch (status_)`. Monitoring is disabled by default;
   `std::nullopt` skips the idle timer without affecting Pings.
