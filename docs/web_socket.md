@@ -58,7 +58,8 @@ stateDiagram-v2
 
     Connected --> Connected: ReadDone [ok]<br/>/ ws_data, next read unless disconnected
     Connected --> Disconnecting: shutdown [idle timer or write failure]<br/>/ cancel timers, async_close
-    Connected --> Disconnected: ControlFrame [close], ReadDone [error]<br/>/ cancel idle timer, on_disconnected
+    Connected --> Disconnected: passive Ping deadline missed<br/>/ close transport, on_disconnected with timeout reason
+    Connected --> Disconnected: ControlFrame [close], ReadDone [error]<br/>/ cancel receive/passive timers, on_disconnected
 
     Disconnecting --> Disconnecting: ReadDone [ok] / ws_data, next read unless disconnected
     Disconnecting --> Disconnected: ControlFrame [close], ReadDone [error],<br/>CloseDone [any] / on_disconnected
@@ -206,7 +207,7 @@ the first field diagnostic, such as `/receive_watchdog/timeout_sec must be posit
 | --- | --- |
 | `async_operation_timeout_sec` | Positive. |
 | `receive_watchdog` | Optional `receive_data_watchdog`, absent by default. When enabled, `timeout_sec` must be positive and defaults to 20. Independent of Ping settings and setup timeout. |
-| `passive_ping` | Optional `server_ping_watchdog`; `ping_timeout_sec` must be positive. Defaults to absent. Deadline enforcement is pending. |
+| `passive_ping` | Optional `server_ping_watchdog`; `ping_timeout_sec` must be positive. Defaults to absent. Enforces a server control Ping deadline from handshake completion and after each received Ping. |
 | `active_ping` | Optional `client_ping_probe`; `ping_period_sec` and `pong_timeout_sec` must be positive. Defaults to absent. Presence enables periodic Pings; Pong deadline enforcement is pending. |
 | Socket buffer sizes | Between 1 and `INT_MAX`; OS acceptance is determined when socket options are applied. |
 | `max_message_size` | Incoming-message byte limit in `[1, UINT_MAX]`; defaults to 16 MiB. Applies to the entire message across fragments, independently of socket buffers. |
@@ -261,7 +262,7 @@ terminal session until reconnect or destruction.
   WebSocket handshake with the owner's current `params().headers` and `agent_name`.
 - **`WsHandshakeDone`** — `on_handshake`: successful WebSocket handshake records activity, sets
   `connected` and emits `on_connected`. If still connected after the delegate returns, start
-  the read/control callbacks and the independently optional idle/Ping timers. Calling `close()` or
+  the read/control callbacks and the independently optional receive/Ping timers. Calling `close()` or
   triggering a write-failure shutdown from the delegate prevents this work from starting.
 - **`ConnectError`** — diagram shorthand for an error in any of those four completions, or SNI
   setup failure inside `on_connect`. Emit `network_error`; no automatic `close()`.
@@ -280,13 +281,13 @@ terminal session until reconnect or destruction.
   Dispatch through `switch (status_)`: connected and disconnecting share the read handler;
   disconnected completions are ignored. Other states assert, or log and return when assertions
   are disabled. Success updates receive activity, emits `ws_data`, consumes the buffer and
-  rearms unless disconnected during the delegate call. Error cancels the idle timer, sets
+  rearms unless disconnected during the delegate call. Error cancels the receive and passive timers, sets
   disconnected and emits `on_disconnected`; remaining buffered bytes are not delivered.
 - **`ControlFrame(kind)`** — `on_control`: `ping`, `pong` or `close`, dispatched through
   `switch (status_)`. Connected and disconnecting share frame handling: the handshake started
   reading, and pending operations may still process control frames after `shutdown()` starts.
   Ping updates receive activity; pong does so only when outbound pings are enabled. Close cancels
-  the idle timer, sets `disconnected` and emits `on_disconnected` (`Closed by server`).
+  the receive and passive timers, sets `disconnected` and emits `on_disconnected` (`Closed by server`).
   Disconnected callbacks are ignored after `close()`, a prior peer close, a read error, or
   `on_shutdown()`. Other states assert, or log and return when assertions are disabled.
 - **`CloseDone(ec)`** — `on_shutdown`: local WebSocket close result, successful or not.
@@ -316,10 +317,18 @@ states and unknown status values.
 
 ### Timers and internal close request
 
-The session holds optional idle and Ping timer objects. `connect()` constructs each only
+The receive watchdog, active Ping cadence, and passive Ping deadline have independent optional timers.
+`connect()` constructs each only
 when its policy is enabled; the waits start after a successful handshake. Cancellation
 checks whether the timer exists. Parameters can still be changed before the first connect.
 
+- **Passive Ping deadline.** When `passive_ping` is present, the first server control Ping is
+  required within `ping_timeout_sec` of handshake completion. Each server Ping starts another
+  full interval; data, application heartbeats, and Pongs do not refresh it. Expiry closes the
+  transport immediately, enters `disconnected`, and emits one `on_disconnected` with reason
+  `Passive Ping timeout: no server Ping within N seconds`. It does not wait for a close reply.
+  Timer errors likewise disconnect with a diagnostic. Canceled or superseded waits are ignored,
+  and explicit close, peer close, read failure, and graceful shutdown cancel this deadline.
 - **`PingTimerDone(ec)`** — `on_ping_timer`: a timer using `params().active_ping->ping_period_sec`
   (20 seconds by default) when `active_ping` is present, dispatched through `switch (status_)`.
   Connected handles the timer started after handshake or rearmed after
@@ -347,14 +356,14 @@ checks whether the timer exists. Parameters can still be changed before the firs
   Other states assert, or log and return when assertions are disabled: the idle timer starts only
   after a successful handshake, and sessions are never reused.
 - **`shutdown()`** — internal close request from idle timer or handled write failure. Requires
-  connected status, then sets `disconnecting`, cancels both timers and starts `async_close(normal)`.
+  connected status, then sets `disconnecting`, cancels enabled timers and starts `async_close(normal)`.
   Closing uses the existing WebSocket timeout settings; no TCP deadline is enabled here.
   Any other status is a precondition violation. All callers enforce the connected-state requirement.
 
-Both timers ignore cancellation and stale successful completions. `shutdown()` has no public
+Timer handlers ignore cancellation and completions delivered after disconnection. `shutdown()` has no public
 API and does not cancel connection attempts.
 Timer and ping completions accept only connected, disconnecting or disconnected, allowing
-cancellation completions after shutdown or `close()`. All three handlers enforce this through
+cancellation completions after shutdown or `close()`. The handlers enforce this through
 their switch's default branch.
 
 The TCP deadline uses `params().async_operation_timeout_sec` when `on_resolve` starts TCP
@@ -435,4 +444,9 @@ The existing tests cover:
 - One-shot Spot symbol retrieval through the relay, complete raw output, basic API error checks,
   partial-response rejection, and command-line validation against local TLS peers.
 
-Idle timer expiry, stalled pings, and the deferred write/exception cases above remain untested.
+- Passive Ping deadlines: first-Ping timeout, repeated refresh and subsequent silence, data/Pong
+  independence, disabled monitoring with automatic Pongs, slow connected handlers, delayed
+  handshake, terminal cleanup, move, and reconnect from the timeout callback.
+
+Active Pong deadline enforcement, broader receive-data policy, and the deferred write/exception
+cases above remain pending.

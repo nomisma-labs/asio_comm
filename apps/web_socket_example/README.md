@@ -76,7 +76,7 @@ Serialize updates with client calls and completion handlers. Settings persist ac
 | --- | --- | --- |
 | `headers` | Empty | Custom HTTP upgrade headers; applied after `agent_name`, so a User-Agent header overrides it |
 | `agent_name` | `nomisma/asio_comm` | HTTP upgrade User-Agent |
-| `passive_ping` | `std::nullopt` | Server Ping expectation; `ping_timeout_sec` defaults to 20 when enabled. Deadline enforcement is pending. |
+| `passive_ping` | `std::nullopt` | Expect a server control Ping within `ping_timeout_sec` (default 20) after handshake and after each Ping. A missed deadline closes the transport and reports a timeout through `on_disconnected`. Data and Pongs do not refresh it. |
 | `active_ping` | `std::nullopt` | Starts periodic Pings and counts received Pongs as activity; `ping_period_sec` defaults to 20. `pong_timeout_sec` also defaults to 20, but enforcement is pending. |
 | `async_operation_timeout_sec` | `30` | The TCP-connect deadline, which also covers the subsequent TLS handshake |
 | `receive_watchdog` | `std::nullopt` | Optional `receive_data_watchdog`; `timeout_sec` defaults to 20 when enabled. Current receive-activity check samples every N + N/2 seconds and closes when whole elapsed seconds exceed N + N/5. |
@@ -84,7 +84,7 @@ Serialize updates with client calls and completion handlers. Settings persist ac
 
 Accepted settings apply to the next connection attempt and remain fixed while it is active.
 Configured durations must be positive; `std::nullopt` disables an optional policy. Buffer sizes
-must fit a positive `int`. Ping timeout fields are validated but not yet enforced. HTTP
+must fit a positive `int`. The active Pong timeout is validated but not yet enforced. HTTP
 fields must have valid syntax and supported lengths, with no duplicate names or overrides of
 managed handshake fields. An explicit `User-Agent` header may override `agent_name`.
 WebSocket handshake/close timeouts

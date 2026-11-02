@@ -47,13 +47,15 @@ export namespace nom
         unsigned max_message_size{default_max_message_size};
 
         // TODO IDs and stage definitions: ws_current_work.md.
-        // TODO[WS-PING] (stage WS-06): Enforce passive Ping and active Pong deadlines.
+        // TODO[WS-PING] (stage WS-06): Enforce active Pong deadlines.
         // TODO[WS-IDLE] (stage WS-06): Review the receive watchdog timer and test it properly
         // (perhaps with a local WebSocket server).
         // TODO[WS-OP-TIMEOUT] (stage WS-06): Review async operation timeouts;
         // reproduce a case when a timeout is triggered.
         struct server_ping_watchdog
         {
+            // Deadline from handshake completion or the last server control Ping.
+            // Expiry closes the transport and reports on_disconnected with a timeout reason.
             unsigned ping_timeout_sec = default_ping_timeout_sec;
         };
 
@@ -62,7 +64,8 @@ export namespace nom
             unsigned ping_period_sec = default_ping_period_sec;
             unsigned pong_timeout_sec = default_ping_timeout_sec;
         };
-        // Ping/Pong timeout values are validated but their enforcement is pending WS-PING.
+        // Only server control Pings refresh passive_ping; data and Pongs do not.
+        // Active Pong deadline enforcement is pending WS-PING.
         // active_ping currently enables periodic Pings and counts received Pongs as activity.
         std::optional<server_ping_watchdog> passive_ping{std::nullopt};
         std::optional<client_ping_probe> active_ping{std::nullopt};

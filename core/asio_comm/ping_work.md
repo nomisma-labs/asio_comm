@@ -101,22 +101,22 @@ These three diagrams start after a successful handshake and an `on_connected` ca
 leaves the session connected. They describe concurrent operations, not additional session
 states. `P` means `active_ping->ping_period_sec` (default when enabled: 20), and `N` means
 `receive_watchdog->timeout_sec` (20 when enabled; the watchdog is absent by default).
-These durations are independent.
-The session stores both timers as `std::optional<net::steady_timer>`. `connect()` constructs
-only the enabled timers from the attempt's parameters; waits start after the handshake.
-Cancellation checks for an existing timer.
+These durations and `passive_ping->ping_timeout_sec` are independent. Enabled timers start
+after the handshake. The passive deadline is measured from handshake completion, then from
+each server control Ping; data and Pongs do not refresh it.
 
-**A. Incoming traffic — Beast reads/replies; the session records activity**
+**A. Incoming traffic — Beast reads/replies; the session enforces the optional server-Ping deadline**
 
 ```mermaid
 stateDiagram-v2
     [*] --> Reading
     state "Beast: async_read pending" as Reading
     state "Session: disconnected" as Disconnected
-    Reading --> Reading : Ping / Beast replies Pong, session records activity
+    Reading --> Reading : Ping / Beast replies Pong, session refreshes passive deadline if enabled
     Reading --> Reading : Pong / session records activity only if active_ping is present
     Reading --> Reading : Complete data / session records activity, delivers ws_data, rearms read
     Reading --> Disconnected : peer Close or read error / notify on_disconnected
+    Reading --> Disconnected : passive deadline expires / close transport, notify timeout reason
     Disconnected --> [*]
 ```
 
@@ -154,35 +154,37 @@ stateDiagram-v2
     IdleCheck --> Disconnecting : inactivity exceeds threshold / shutdown()
     IdleWait --> Disconnecting : idle timer error other than cancellation / shutdown()
     note right of Disconnecting
-        Session cancels both timers.
+        Session cancels enabled timers.
         Beast performs async_close.
     end note
     Disconnecting --> Disconnected : close completion, peer Close or read error / notify once
     Disconnected --> [*]
 ```
 
-Across all three paths, explicit `close()` closes the socket, cancels both timers and sets
+Across all three paths, explicit `close()` closes the socket, cancels enabled timers and sets
 `disconnected` without a delegate notification. Ping/idle callbacks stop scheduling work
 once the session is disconnecting or disconnected.
 
-- **No missing-Ping or missing-Pong state exists.** `on_ping()` means the write completed,
+- **Active Pong deadline tracking is still missing.** `on_ping()` means the write completed,
   not that a Pong arrived. Incoming Pong payloads are not matched. A Ping write failure
   logs and rearms while connected; it does not itself call `shutdown()`.
 - **The current idle check is a mixed-activity check.** Complete data messages and server
-  Pings refresh `last_recv_ts_`; any Pong does so when `active_ping` is present. Missing
-  Pings/Pongs can therefore go unnoticed while data keeps arriving. Partial data progress
+  Pings refresh `last_recv_ts_`; any Pong does so when `active_ping` is present. This watchdog
+  alone cannot detect missing Pings/Pongs while data keeps arriving; `passive_ping` independently
+  enforces server Pings. Partial data progress
   does not refresh the timestamp. With a watchdog enabled at 20 s, the check runs every 30 s and closes when
   whole elapsed seconds exceed 24; it is not a precise 24 s deadline. Expiry logs the idle
   cause, but the disconnection event does not preserve a dedicated idle-timeout reason.
   `receive_watchdog` is absent by default, so no idle timer runs. Enabling a `receive_data_watchdog`
   requires a positive `timeout_sec`; disabling it does not disable outgoing Pings or automatic Pong replies.
-- **Terminal cleanup differs by path.** Peer Close/read errors cancel the idle timer but
+- **Terminal cleanup differs by path.** Peer Close/read errors cancel the receive and passive timers but
   may leave a pending Ping timer until expiry; its callback then ignores the terminal state.
-  `shutdown()` and explicit `close()` cancel both timers.
-- **Ping deadline enforcement is pending.** `active_ping` supplies the outbound period;
-  `passive_ping->ping_timeout_sec` and `active_ping->pong_timeout_sec` are validated as
-  positive but have no runtime effect yet. This preparatory migration preserves the existing
-  Ping behavior. Application heartbeats still reach the application as ordinary `ws_data`.
+  `shutdown()` and explicit `close()` cancel enabled timers.
+- **Passive Ping deadlines are enforced.** A missed deadline aborts the transport and emits
+  one `on_disconnected` with `Passive Ping timeout: no server Ping within N seconds`, without
+  waiting for a close handshake. Pings still receive automatic Pongs with monitoring disabled.
+  `active_ping->pong_timeout_sec` is validated but its enforcement remains pending.
+  Application heartbeats still reach the application as ordinary `ws_data`.
 
 Source entry points: `on_handshake`, `on_control`, `on_ping_timer`, `on_ping`, `on_receive_watchdog_timer`,
 `on_receive`, `shutdown`, `on_shutdown`, and `close` in [web_socket.cpp](web_socket.cpp).

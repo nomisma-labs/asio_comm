@@ -187,6 +187,14 @@ namespace nom
             catch (...)
             {
             }
+            try
+            {
+                if (passive_ping_timer_)
+                    passive_ping_timer_->cancel();
+            }
+            catch (...)
+            {
+            }
         }
 
         ws_status status() const noexcept
@@ -214,6 +222,8 @@ namespace nom
                         receive_watchdog_timer_.emplace(parent_->io_->executor);
                     if (parent_->params_.active_ping)
                         active_ping_timer_.emplace(parent_->io_->executor);
+                    if (parent_->params_.passive_ping)
+                        passive_ping_timer_.emplace(parent_->io_->executor);
                     setup_ = std::make_unique<setup_state>(parent_->io_->executor);
                     setup_->resolver.async_resolve(parent_->url_.host(),
                                                    std::to_string(parent_->url_.port()),
@@ -490,6 +500,8 @@ namespace nom
                 // The stream owns this callback; pending operations keep the session alive.
                 stream_.control_callback(beast::bind_front_handler(&session::on_control, this));
 
+                if (passive_ping_timer_)
+                    start_passive_ping_timer(last_recv_ts_);
                 stream_.async_read(buffer_, beast::bind_front_handler(&session::on_receive, shared_from_this()));
                 if (receive_watchdog_timer_)
                     start_receive_watchdog_timer();
@@ -519,6 +531,8 @@ namespace nom
                 case websocket::frame_type::ping:
                 {
                     last_recv_ts_ = std::chrono::steady_clock::now();
+                    if (ws_status::connected == status_ && passive_ping_timer_)
+                        start_passive_ping_timer(last_recv_ts_);
                     break;
                 }
                 case websocket::frame_type::pong:
@@ -532,6 +546,8 @@ namespace nom
                     LDEBUG("{} Close request received from server", id());
                     if (receive_watchdog_timer_)
                         receive_watchdog_timer_->cancel();
+                    if (passive_ping_timer_)
+                        passive_ping_timer_->cancel();
                     set_status<ws_status::disconnected>();
                     delegate_(
                         *parent_,
@@ -546,6 +562,51 @@ namespace nom
                 break;
             default:
                 assert(false && "Control callbacks require connected, disconnecting, or disconnected state");
+                LERROR("{} Unexpected state: {}", id(), enum_to_string(status_));
+                break;
+            }
+        }
+
+        void start_passive_ping_timer(network_timestamp received_at)
+        {
+            assert(passive_ping_timer_ && parent_->params_.passive_ping);
+            // The first deadline uses handshake time; later deadlines use server Ping receipt time.
+            passive_ping_timer_->expires_at(received_at +
+                                            std::chrono::seconds{parent_->params_.passive_ping->ping_timeout_sec});
+            passive_ping_timer_->async_wait(
+                beast::bind_front_handler(&session::on_passive_ping_timer, shared_from_this()));
+        }
+
+        void on_passive_ping_timer(beast::error_code ec)
+        {
+            switch (status_)
+            {
+            case ws_status::connected:
+            {
+                if (net::error::operation_aborted == ec)
+                    break;
+
+                assert(passive_ping_timer_ && parent_->params_.passive_ping);
+                const auto now = std::chrono::steady_clock::now();
+                // A Ping can refresh the deadline after an older successful expiry was already queued.
+                if (!ec && now < passive_ping_timer_->expiry())
+                    break;
+
+                auto reason = ec ? "Passive Ping timer error: " + ec.message()
+                                 : std::format("Passive Ping timeout: no server Ping within {} seconds",
+                                               parent_->params_.passive_ping->ping_timeout_sec);
+                // An unresponsive peer must not delay disconnection through a close handshake.
+                close();
+                LWARN("{} {}", id(), reason);
+                delegate_(*parent_, event::on_disconnected{.ts = now, .reason = std::move(reason)});
+                break;
+            }
+            case ws_status::disconnecting:
+            case ws_status::disconnected:
+                // Canceled waits and queued expiries cannot rearm or notify after shutdown/close.
+                break;
+            default:
+                assert(false && "Passive Ping waits require connected, disconnecting, or disconnected state");
                 LERROR("{} Unexpected state: {}", id(), enum_to_string(status_));
                 break;
             }
@@ -716,6 +777,8 @@ namespace nom
                 {
                     if (receive_watchdog_timer_)
                         receive_watchdog_timer_->cancel();
+                    if (passive_ping_timer_)
+                        passive_ping_timer_->cancel();
                     set_status<ws_status::disconnected>();
                     delegate_(*parent_,
                               event::on_disconnected{.ts = std::chrono::steady_clock::now(),
@@ -790,6 +853,8 @@ namespace nom
                     receive_watchdog_timer_->cancel();
                 if (active_ping_timer_)
                     active_ping_timer_->cancel();
+                if (passive_ping_timer_)
+                    passive_ping_timer_->cancel();
 
                 stream_.async_close(websocket::close_code::normal,
                                     beast::bind_front_handler(&session::on_shutdown, shared_from_this()));
@@ -842,6 +907,7 @@ namespace nom
         network_timestamp last_recv_ts_{};
         std::optional<net::steady_timer> receive_watchdog_timer_;
         std::optional<net::steady_timer> active_ping_timer_;
+        std::optional<net::steady_timer> passive_ping_timer_;
     };
 
     // DONE TODO[WS-EAGER-SESSION] (stage WS-02): Always create a session so web_socket::send

@@ -17,6 +17,8 @@ if(nom_build_tests AND TARGET web_socket_example)
             DEPS Boost::headers nom::asio_comm nom::spd_logger)
         nom_app(asio_comm_receive_watchdog_client IMPORT_STD SOURCES web_socket/receive_watchdog_test.cxx
             DEPS Boost::headers nom::asio_comm nom::spd_logger)
+        nom_app(asio_comm_passive_ping_client IMPORT_STD SOURCES web_socket/passive_ping_test.cxx
+            DEPS Boost::headers nom::asio_comm nom::spd_logger)
         nom_app(asio_comm_large_messages_client IMPORT_STD SOURCES web_socket/large_messages_test.cxx
             DEPS Boost::headers nom::asio_comm nom::spd_logger)
     endblock()
@@ -39,6 +41,10 @@ if(nom_build_tests AND TARGET web_socket_example)
             --disconnecting-client $<TARGET_FILE:asio_comm_disconnecting_client> --openssl ${openssl_executable}
             ${binance_feeder_args})
     set_tests_properties(${PROJECT_NAME}_web_socket_loopback PROPERTIES LABELS integration TIMEOUT 60)
+    add_test(NAME ${PROJECT_NAME}_passive_ping
+        COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/web_socket/passive_ping_test.py
+            --client $<TARGET_FILE:asio_comm_passive_ping_client> --openssl ${openssl_executable})
+    set_tests_properties(${PROJECT_NAME}_passive_ping PROPERTIES LABELS integration TIMEOUT 45)
 endif()
 
 if(nom_build_tests AND TARGET binance_spot_resubscribe_test)
