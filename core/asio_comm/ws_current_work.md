@@ -3,7 +3,8 @@
 The broader execution, timer-wrapper, alternate-backend, and simulation design is proposed in
 [current_work.md](current_work.md). This document tracks WebSocket-specific cleanup and fixes.
 
-This report reviews the [interface](web_socket.cppm), [implementation](web_socket.cpp), and their TODOs,
+This report reviews the [interface](web_socket.cppm), [parameters](ws_params.cppm),
+[implementation](web_socket.cpp), and their TODOs,
 the [component contract](../../docs/web_socket.md), and the existing unit and integration
 test sources. It also revisits the issue review in the conversation; no separate issue-report
 file was found in the repository. Findings below come from source inspection and dependency
@@ -28,7 +29,7 @@ prerequisite for the work.
 Stage numbers identify work batches rather than completion order; WS-06 is next.
 Other stage IDs remain unchanged.
 Source comments use `TODO[WS-…] (stage WS-…)`; each TODO ID identifies one concern and stays
-unchanged if work is reordered. Search either source file for the exact TODO ID. The lists at the start of each stage
+unchanged if work is reordered. Search the source files for the exact TODO ID. The lists at the start of each stage
 link to its source file. Each TODO has one owning stage, including its documentation,
 implementation, and validation. Related stages use cross-references rather than duplicate
 work entries; the index below is a navigation aid. Listing a TODO does not mean it is
@@ -140,7 +141,7 @@ These proposals are deferred and do not block the next stage.
 
 **Source TODOs covered:**
 
-- [`WS-PARAMS`](web_socket.cppm) — Review parameter contracts and validation.
+- [`WS-PARAMS`](ws_params.cppm) — Review parameter contracts and validation.
 
 **Complete — 2026-11-01.** Mutable `params()` is replaced by `update_params(const ws_params&)`
 and a read-only getter. `ws_params::validate() const` returns `std::expected<void, std::string>`
@@ -175,7 +176,7 @@ pass. Bootstrap's Git setup remains blocked by read-only metadata; direct CMake 
 
 **Source TODOs covered:**
 
-- [`WS-LARGE-MESSAGES`](web_socket.cppm) — Test sending and receiving really big messages (e.g. a huge Coinbase initial snapshot); distinguish socket buffers from message limits.
+- [`WS-LARGE-MESSAGES`](ws_params.cppm) — Test sending and receiving really big messages (e.g. a huge Coinbase initial snapshot); distinguish socket buffers from message limits.
 
 **Complete — 2026-11-01.** Large-message handling, configurable limits, and disconnect diagnostics
 are implemented and validated. `WS-LARGE-MESSAGES` is covered by this completed stage.
@@ -235,9 +236,9 @@ continues in WS-06.
 
 **Source TODOs covered:**
 
-- [`WS-PING`](web_socket.cppm) — Enforce passive Ping and active Pong deadlines.
-- [`WS-IDLE`](web_socket.cppm) — Review the receive watchdog timer and test it properly (perhaps with a local WebSocket server).
-- [`WS-OP-TIMEOUT`](web_socket.cppm) — Review async operation timeouts; reproduce a case when a timeout is triggered.
+- [`WS-PING`](ws_params.cppm) — Enforce passive Ping and active Pong deadlines.
+- [`WS-IDLE`](ws_params.cppm) — Review the receive watchdog timer and test it properly (perhaps with a local WebSocket server).
+- [`WS-OP-TIMEOUT`](ws_params.cppm) — Review async operation timeouts; reproduce a case when a timeout is triggered.
 - [`WS-CONNECT-DEADLINE`](web_socket.cpp) — Make the connection procedure time-bound (we can use default_async_operation_timeout_sec for it).
 - [`WS-CABLE-LOSS`](web_socket.cppm) — Reproduce hard disconnection (unplug the network cable).
 - [`WS-INTERFACE-LOSS`](web_socket.cppm) — Reproduce Docker-based interface disconnection (a soft disconnection of a virtual interface may only be caught by the receive watchdog timer).
@@ -423,11 +424,11 @@ Markdown/link and diff review.
 
 | Source TODO ID | Complete source TODO | Owner stage |
 | --- | --- | --- |
-| [`WS-PARAMS`](web_socket.cppm) | Review parameter contracts and validation. | [WS-04](#ws-04) |
-| [`WS-PING`](web_socket.cppm) | Enforce passive Ping and active Pong deadlines. | [WS-06](#ws-06) |
-| [`WS-IDLE`](web_socket.cppm) | Review the receive watchdog timer and test it properly (perhaps with a local WebSocket server). | [WS-06](#ws-06) |
-| [`WS-OP-TIMEOUT`](web_socket.cppm) | Review async operation timeouts; reproduce a case when a timeout is triggered. | [WS-06](#ws-06) |
-| [`WS-LARGE-MESSAGES`](web_socket.cppm) | Test sending and receiving really big messages (e.g. a huge Coinbase initial snapshot); distinguish socket buffers from message limits. | [WS-05](#ws-05) |
+| [`WS-PARAMS`](ws_params.cppm) | Review parameter contracts and validation. | [WS-04](#ws-04) |
+| [`WS-PING`](ws_params.cppm) | Enforce passive Ping and active Pong deadlines. | [WS-06](#ws-06) |
+| [`WS-IDLE`](ws_params.cppm) | Review the receive watchdog timer and test it properly (perhaps with a local WebSocket server). | [WS-06](#ws-06) |
+| [`WS-OP-TIMEOUT`](ws_params.cppm) | Review async operation timeouts; reproduce a case when a timeout is triggered. | [WS-06](#ws-06) |
+| [`WS-LARGE-MESSAGES`](ws_params.cppm) | Test sending and receiving really big messages (e.g. a huge Coinbase initial snapshot); distinguish socket buffers from message limits. | [WS-05](#ws-05) |
 | [`WS-INIT`](web_socket.cppm) | Introduce init (a session should start in init, not in disconnected). | [WS-02](#ws-02) |
 | [`WS-FAILURE-NAME`](web_socket.cppm) | Rename failed to conn_failed. | [WS-02](#ws-02) |
 | [`WS-TERMINAL-FAILURE`](web_socket.cppm) | Make conn_failed terminal, on the same level as disconnected. | [WS-02](#ws-02) |

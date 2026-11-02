@@ -1,6 +1,7 @@
 # WebSocket
 
-This records the public [module interface](../core/asio_comm/web_socket.cppm) and
+This records the public [module interface](../core/asio_comm/web_socket.cppm),
+[parameters](../core/asio_comm/ws_params.cppm), and
 the [session implementation](../core/asio_comm/web_socket.cpp). The diagram describes
 one `web_socket::session`. The wrapper constructs its first session eagerly; the first
 `connect()` starts that session, and later attempts close and replace the previous session. Usage examples are in the [WebSocket example README](../apps/web_socket_example/README.md).

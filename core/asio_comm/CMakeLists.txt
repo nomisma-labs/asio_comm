@@ -1,7 +1,9 @@
 # SPDX-FileCopyrightText: 2026 Alexey Tkachenko
 # SPDX-License-Identifier: LicenseRef-Nomisma-Labs-Proprietary
 
-nom_lib(asio_comm IMPORT_STD MODULES web_socket.cppm SOURCES web_socket.cpp
+nom_lib(asio_comm IMPORT_STD
+    MODULES web_socket.cppm ws_params.cppm
+    SOURCES web_socket.cpp ws_params.cpp
     PUBLIC_DEPS nom::base_url nom::assembly Boost::headers OpenSSL::SSL Threads::Threads
     PRIVATE_DEPS nom::base_enum nom::spd_logger)
 
