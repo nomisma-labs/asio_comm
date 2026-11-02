@@ -243,6 +243,10 @@ continues in WS-06.
 - [`WS-INTERFACE-LOSS`](web_socket.cppm) — Reproduce Docker-based interface disconnection (a soft disconnection of a virtual interface may only be caught by the idle timer).
 - [`WS-PEER-CLOSE`](web_socket.cppm) — Reproduce normal server disconnection (e.g. Binance resets the MD connection once per day).
 
+Heartbeat research, exchange requirements, and interface options are in
+[ping_work.md](ping_work.md). It distinguishes transport probes, application heartbeats,
+private-feed leases, and market-data freshness; its proposals are not yet implemented.
+
 **Lifecycle follow-up from WS-02 (no separate source TODO):** make idle/ping cancellation
 consistent across peer close, read errors, explicit close, and graceful-close completion.
 In particular, peer-close/read-error paths can leave a ping wait pending until it expires.
