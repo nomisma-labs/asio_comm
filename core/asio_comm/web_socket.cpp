@@ -104,9 +104,17 @@ namespace nom
     {
         if (async_operation_timeout_sec == 0)
             return std::unexpected("/async_operation_timeout_sec must be positive");
-        // Idle detection uses this interval even when outbound pings are disabled.
-        if (ping_interval_sec == 0)
-            return std::unexpected("/ping_interval_sec must be positive");
+        if (receive_watchdog && receive_watchdog->timeout_sec == 0)
+            return std::unexpected("/receive_watchdog/timeout_sec must be positive");
+        if (passive_ping && passive_ping->ping_timeout_sec == 0)
+            return std::unexpected("/passive_ping/ping_timeout_sec must be positive");
+        if (active_ping)
+        {
+            if (active_ping->ping_period_sec == 0)
+                return std::unexpected("/active_ping/ping_period_sec must be positive");
+            if (active_ping->pong_timeout_sec == 0)
+                return std::unexpected("/active_ping/pong_timeout_sec must be positive");
+        }
         constexpr auto max_buffer_size = static_cast<unsigned>(std::numeric_limits<int>::max());
         if (socket_send_buf_size == 0 || socket_send_buf_size > max_buffer_size)
             return std::unexpected("/socket_send_buf_size must be in [1, INT_MAX]");
@@ -189,8 +197,7 @@ namespace nom
                       strm << "WS[" << parent_->url_ << ':' << next_id.fetch_add(1, std::memory_order_relaxed) << ']';
                       return strm.str();
                   }()},
-              stream_(parent_->io_->executor, parent_->io_->ssl_ctx), idle_timer_(parent_->io_->executor),
-              ping_timer_(parent_->io_->executor)
+              stream_(parent_->io_->executor, parent_->io_->ssl_ctx)
         {
         }
 
@@ -254,14 +261,16 @@ namespace nom
             }
             try
             {
-                idle_timer_.cancel();
+                if (idle_timer_)
+                    idle_timer_->cancel();
             }
             catch (...)
             {
             }
             try
             {
-                ping_timer_.cancel();
+                if (active_ping_timer_)
+                    active_ping_timer_->cancel();
             }
             catch (...)
             {
@@ -276,8 +285,6 @@ namespace nom
         // TODO IDs and stage definitions: ws_current_work.md.
         // TODO[WS-CONNECT-DEADLINE] (stage WS-06): Make the connection procedure time-bound
         // (we can use default_async_operation_timeout_sec for it).
-        // DONE TODO[WS-SETUP-STORAGE] (stage WS-02): Dispose of state required only for connection setup
-        // after the connection is established (e.g. resolver).
         // TODO[WS-TRANSPORT-OPTIONS] (stage WS-09): Test various connection options
         // (different TLS levels, no SSL?).
         void connect()
@@ -290,6 +297,11 @@ namespace nom
 
                 try
                 {
+                    // Parameters are fixed for this attempt; disabled policies need no timer objects.
+                    if (parent_->params_.receive_watchdog)
+                        idle_timer_.emplace(parent_->io_->executor);
+                    if (parent_->params_.active_ping)
+                        active_ping_timer_.emplace(parent_->io_->executor);
                     setup_ = std::make_unique<setup_state>(parent_->io_->executor);
                     setup_->resolver.async_resolve(parent_->url_.host(),
                                                    std::to_string(parent_->url_.port()),
@@ -560,7 +572,7 @@ namespace nom
                 if (ws_status::connected != status_)
                     break;
 
-                if (parent_->params_.enable_outbound_ping)
+                if (active_ping_timer_)
                 {
                     LDEBUG("{} Enable outbound ping", id());
                     start_ping_timer();
@@ -570,7 +582,8 @@ namespace nom
                 stream_.control_callback(beast::bind_front_handler(&session::on_control, this));
 
                 stream_.async_read(buffer_, beast::bind_front_handler(&session::on_receive, shared_from_this()));
-                start_idle_timer();
+                if (idle_timer_)
+                    start_idle_timer();
                 break;
             }
             case ws_status::conn_failed:
@@ -602,7 +615,7 @@ namespace nom
                 }
                 case websocket::frame_type::pong:
                 {
-                    if (parent_->params_.enable_outbound_ping)
+                    if (parent_->params_.active_ping)
                         last_recv_ts_ = std::chrono::steady_clock::now();
                     LDEBUG("{} Pong response received from server", id());
                     break;
@@ -610,7 +623,8 @@ namespace nom
                 case websocket::frame_type::close:
                 {
                     LDEBUG("{} Close request received from server", id());
-                    idle_timer_.cancel();
+                    if (idle_timer_)
+                        idle_timer_->cancel();
                     set_status<ws_status::disconnected>();
                     delegate_(
                         *parent_,
@@ -632,17 +646,19 @@ namespace nom
 
         void start_idle_timer()
         {
-            const auto ping_interval_sec = parent_->params_.ping_interval_sec;
-            const auto idle_timer_grace_period_sec = ping_interval_sec / 2;
-            idle_timer_.expires_after(std::chrono::seconds{ping_interval_sec} +
-                                      std::chrono::seconds{idle_timer_grace_period_sec});
-            idle_timer_.async_wait(beast::bind_front_handler(&session::on_idle_timer, shared_from_this()));
+            assert(idle_timer_ && parent_->params_.receive_watchdog);
+            const auto idle_timeout_sec = parent_->params_.receive_watchdog->timeout_sec;
+            const auto idle_timer_grace_period_sec = idle_timeout_sec / 2;
+            idle_timer_->expires_after(std::chrono::seconds{idle_timeout_sec} +
+                                       std::chrono::seconds{idle_timer_grace_period_sec});
+            idle_timer_->async_wait(beast::bind_front_handler(&session::on_idle_timer, shared_from_this()));
         }
 
         void start_ping_timer()
         {
-            ping_timer_.expires_after(std::chrono::seconds{parent_->params_.ping_interval_sec});
-            ping_timer_.async_wait(beast::bind_front_handler(&session::on_ping_timer, shared_from_this()));
+            assert(active_ping_timer_ && parent_->params_.active_ping);
+            active_ping_timer_->expires_after(std::chrono::seconds{parent_->params_.active_ping->ping_period_sec});
+            active_ping_timer_->async_wait(beast::bind_front_handler(&session::on_ping_timer, shared_from_this()));
         }
 
         void on_ping_timer(beast::error_code ec)
@@ -723,8 +739,9 @@ namespace nom
                     break;
                 }
 
-                const auto ping_interval_sec = parent_->params_.ping_interval_sec;
-                const auto ping_jitter_period_sec = ping_interval_sec / 5; // Pings may arrive later than expected.
+                assert(parent_->params_.receive_watchdog);
+                const auto idle_timeout_sec = parent_->params_.receive_watchdog->timeout_sec;
+                const auto idle_tolerance_sec = idle_timeout_sec / 5;
 
                 const auto diff_ts =
                     std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - last_recv_ts_)
@@ -732,7 +749,7 @@ namespace nom
 
                 if (const bool is_idle_connection =
                         std::chrono::seconds{diff_ts} >
-                        std::chrono::seconds{ping_interval_sec} + std::chrono::seconds{ping_jitter_period_sec};
+                        std::chrono::seconds{idle_timeout_sec} + std::chrono::seconds{idle_tolerance_sec};
                     is_idle_connection)
                 {
                     LWARN("{} Idle timer expired: no tracked receive activity for {} seconds", id(), diff_ts);
@@ -788,7 +805,8 @@ namespace nom
             {
                 if (ec)
                 {
-                    idle_timer_.cancel();
+                    if (idle_timer_)
+                        idle_timer_->cancel();
                     set_status<ws_status::disconnected>();
                     delegate_(*parent_,
                               event::on_disconnected{.ts = std::chrono::steady_clock::now(),
@@ -859,8 +877,10 @@ namespace nom
             case ws_status::connected:
             {
                 set_status<ws_status::disconnecting>();
-                idle_timer_.cancel();
-                ping_timer_.cancel();
+                if (idle_timer_)
+                    idle_timer_->cancel();
+                if (active_ping_timer_)
+                    active_ping_timer_->cancel();
 
                 stream_.async_close(websocket::close_code::normal,
                                     beast::bind_front_handler(&session::on_shutdown, shared_from_this()));
@@ -911,8 +931,8 @@ namespace nom
         websocket::stream<ws_tls_stream> stream_;
         beast::flat_buffer buffer_;
         network_timestamp last_recv_ts_{};
-        net::steady_timer idle_timer_;
-        net::steady_timer ping_timer_;
+        std::optional<net::steady_timer> idle_timer_;
+        std::optional<net::steady_timer> active_ping_timer_;
     };
 
     // DONE TODO[WS-EAGER-SESSION] (stage WS-02): Always create a session so web_socket::send

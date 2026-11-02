@@ -101,7 +101,8 @@ public:
         // to test_request notifications, which control Pongs cannot satisfy.
         // https://docs.deribit.com/api-reference/session-management/public-set_heartbeat
         auto params = client_.params();
-        params.enable_outbound_ping = true;
+        params.active_ping = nom::ws_params::client_ping_probe{};
+        params.receive_watchdog = nom::ws_params::receive_data_watchdog{};
         client_.update_params(params);
     }
 

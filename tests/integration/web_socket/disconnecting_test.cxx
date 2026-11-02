@@ -26,7 +26,7 @@ int main(int argc, char** argv)
         boost::asio::io_context io;
         nom::web_socket client(io.get_executor(), nom::url(argv[1]));
         auto params = client.params();
-        params.enable_outbound_ping = true;
+        params.active_ping = nom::ws_params::client_ping_probe{};
         client.update_params(params);
         boost::asio::steady_timer deadline(io);
         unsigned connected = 0;

@@ -89,34 +89,127 @@ heartbeats. [Beast timeouts](https://www.boost.org/doc/libs/latest/libs/beast/do
 
 **4. Our interface: gaps and proposed changes**
 
-Current [parameters/events](web_socket.cppm) and [session implementation](web_socket.cpp):
+**Current handling — checked 2026-11-03**
 
-- `enable_outbound_ping` controls periodic empty control Pings only. Automatic Pong replies
-  still work when it is false, and our idle timer still runs.
-- Idle checking derives its interval and tolerance from `ping_interval_sec`. Complete data
-  messages and incoming Pings refresh activity; Pongs refresh it only when outbound Ping is
-  enabled. Partial-message progress does not refresh it. Ping failure logs and rearms.
-- There is no matched-Pong deadline or public control-frame event. `ws_data` supplies bytes
-  without text/binary metadata. `send()` blocks and reports local write completion.
-- Peer close/read errors can leave a ping timer pending until expiry. This remains the first
-  small lifecycle fix in WS-06.
+The [session implementation](web_socket.cpp) **does explicitly initiate control Pings**:
+`on_handshake()` → `start_ping_timer()` → `on_ping_timer()` → `stream_.async_ping({})`.
+This runs only when `active_ping` is present (default: absent). **Beast sends automatic
+Pong replies** during reads, regardless of that setting. Beast's own idle timeout and automatic
+keepalive Pings are disabled by the client timeout settings.
+
+These three diagrams start after a successful handshake and an `on_connected` callback that
+leaves the session connected. They describe concurrent operations, not additional session
+states. `P` means `active_ping->ping_period_sec` (default when enabled: 20), and `N` means
+`receive_watchdog->timeout_sec` (20 when enabled; the watchdog is absent by default).
+These durations are independent.
+The session stores both timers as `std::optional<net::steady_timer>`. `connect()` constructs
+only the enabled timers from the attempt's parameters; waits start after the handshake.
+Cancellation checks for an existing timer.
+
+**A. Incoming traffic — Beast reads/replies; the session records activity**
+
+```mermaid
+stateDiagram-v2
+    [*] --> Reading
+    state "Beast: async_read pending" as Reading
+    state "Session: disconnected" as Disconnected
+    Reading --> Reading : Ping / Beast replies Pong, session records activity
+    Reading --> Reading : Pong / session records activity only if active_ping is present
+    Reading --> Reading : Complete data / session records activity, delivers ws_data, rearms read
+    Reading --> Disconnected : peer Close or read error / notify on_disconnected
+    Disconnected --> [*]
+```
+
+**B. Outbound Pings — the session schedules; Beast writes**
+
+```mermaid
+stateDiagram-v2
+    [*] --> OutboundPingEnabled
+    state OutboundPingEnabled <<choice>>
+    state "No outbound Ping timer" as PingOff
+    state "Session: wait P seconds" as PingWait
+    state "Beast: async_ping writes empty Ping" as PingWrite
+    OutboundPingEnabled --> PingOff : active_ping is absent
+    OutboundPingEnabled --> PingWait : active_ping is present
+    PingWait --> PingWrite : session.on_ping_timer calls async_ping
+    PingWrite --> PingWait : session.on_ping logs success or error, rearms timer
+    PingWait --> PingOff : timer error / log unless canceled, no rearm
+```
+
+**C. Receive-activity watchdog — the session checks inactivity and initiates shutdown**
+
+```mermaid
+stateDiagram-v2
+    [*] --> IdleEnabled
+    state IdleEnabled <<choice>>
+    state "No idle timer" as IdleOff
+    IdleEnabled --> IdleOff : receive_watchdog is absent (default)
+    IdleEnabled --> IdleWait : receive_watchdog is present
+    state "Session: wait N + floor(N / 2) seconds" as IdleWait
+    state "Check elapsed time since last_recv_ts_" as IdleCheck
+    state "Session: disconnecting" as Disconnecting
+    state "Session: disconnected" as Disconnected
+    IdleWait --> IdleCheck : session.on_idle_timer
+    IdleCheck --> IdleWait : elapsed seconds at most N + floor(N / 5)
+    IdleCheck --> Disconnecting : inactivity exceeds threshold / shutdown()
+    IdleWait --> Disconnecting : idle timer error other than cancellation / shutdown()
+    note right of Disconnecting
+        Session cancels both timers.
+        Beast performs async_close.
+    end note
+    Disconnecting --> Disconnected : close completion, peer Close or read error / notify once
+    Disconnected --> [*]
+```
+
+Across all three paths, explicit `close()` closes the socket, cancels both timers and sets
+`disconnected` without a delegate notification. Ping/idle callbacks stop scheduling work
+once the session is disconnecting or disconnected.
+
+- **No missing-Ping or missing-Pong state exists.** `on_ping()` means the write completed,
+  not that a Pong arrived. Incoming Pong payloads are not matched. A Ping write failure
+  logs and rearms while connected; it does not itself call `shutdown()`.
+- **The current idle check is a mixed-activity check.** Complete data messages and server
+  Pings refresh `last_recv_ts_`; any Pong does so when `active_ping` is present. Missing
+  Pings/Pongs can therefore go unnoticed while data keeps arriving. Partial data progress
+  does not refresh the timestamp. With a watchdog enabled at 20 s, the check runs every 30 s and closes when
+  whole elapsed seconds exceed 24; it is not a precise 24 s deadline. Expiry logs the idle
+  cause, but the disconnection event does not preserve a dedicated idle-timeout reason.
+  `receive_watchdog` is absent by default, so no idle timer runs. Enabling a `receive_data_watchdog`
+  requires a positive `timeout_sec`; disabling it does not disable outgoing Pings or automatic Pong replies.
+- **Terminal cleanup differs by path.** Peer Close/read errors cancel the idle timer but
+  may leave a pending Ping timer until expiry; its callback then ignores the terminal state.
+  `shutdown()` and explicit `close()` cancel both timers.
+- **Ping deadline enforcement is pending.** `active_ping` supplies the outbound period;
+  `passive_ping->ping_timeout_sec` and `active_ping->pong_timeout_sec` are validated as
+  positive but have no runtime effect yet. This preparatory migration preserves the existing
+  Ping behavior. Application heartbeats still reach the application as ordinary `ws_data`.
+
+Source entry points: `on_handshake`, `on_control`, `on_ping_timer`, `on_ping`, `on_idle_timer`,
+`on_receive`, `shutdown`, `on_shutdown`, and `close` in [web_socket.cpp](web_socket.cpp).
+Beast ownership is documented in [control-frame handling](https://www.boost.org/doc/libs/latest/libs/beast/doc/html/beast/using_websocket/control_frames.html)
+and [Ping write completion](https://www.boost.org/doc/libs/latest/libs/beast/doc/html/beast/ref/boost__beast__websocket__stream/async_ping.html).
+
+**Target distinction:** the future data-idle policy tracks useful data and must remain
+independent of control Ping/Pong health. The mixed-activity behavior above is the current
+implementation, not that intended contract. Data-idle details remain a separate discussion.
+
+Other interface gaps: no public control-frame event; `ws_data` supplies bytes without
+text/binary metadata; `send()` blocks and reports local write completion.
 
 Recommended responsibility split:
 
 | Layer | Owns |
 | --- | --- |
-| `web_socket` session | RFC framing/replies, continuous reading, optional control probes, transport inactivity, setup/close deadlines, terminal cleanup and diagnostics. |
+| `web_socket` session | RFC framing/replies, continuous reading, optional control-heartbeat policies, setup/close deadlines, terminal cleanup and diagnostics. Data-idle policy is separate and pending definition. |
 | Exchange connection adapter | Application heartbeat encoding/replies, negotiated intervals, authentication, subscription acknowledgement, token renewal and reconnect readiness. |
 | MD/order consumer | Per-channel/symbol freshness, sequence continuity, order-response deadlines and reconciliation of unknown outcomes. |
 
 **Minimal interface direction:**
 
-1. Separate an independently disableable **receive-idle timeout** from the optional outbound
-   **control-ping interval**. Name both explicitly; disabling one must not implicitly disable
-   the other. Use precise steady-clock deadlines. Recommend counting all received control
-   activity and partial data progress for transport liveness; track useful MD separately.
-   Partial progress may require `async_read_some` internally while retaining complete-message
-   delivery and the existing message-size limit.
+1. Separate optional **server control-Ping monitoring** and **client control-Ping/Pong
+   probing** from data-idle detection. Use precise steady-clock deadlines for control
+   expectations. Control traffic must not satisfy the future useful-data idle policy;
+   define that policy separately.
 2. Add text/binary kind to `ws_data`. HTX gzip and MEXC Protobuf need adapter decoding; gzip
    here is application compression, separate from WebSocket compression. Bound decoded output
    as well as the received message. Preserve the existing borrowed-payload lifetime contract.

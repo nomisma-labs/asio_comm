@@ -152,9 +152,9 @@ valid updates during an active session throw `std::logic_error`. Copying before 
 swap preserves installed settings and session behavior on failure. The session has no
 parameter-update method. Settings remain fixed throughout an attempt and persist on reconnect.
 
-Validation requires positive timeout/ping intervals and positive socket buffers representable
-as `int`. Ping intervals remain positive with outbound pings disabled because idle detection
-uses them. HTTP names/values and `agent_name` are checked for syntax and supported lengths;
+Validation requires positive configured durations and positive socket buffers representable
+as `int`. WS-06 separates optional idle monitoring from optional Ping policies; absent policies
+are disabled. HTTP names/values and `agent_name` are checked for syntax and supported lengths;
 case-insensitive duplicates and managed handshake/framing overrides are rejected. Explicit
 `User-Agent` overrides remain supported. See the [component contract](../../docs/web_socket.md)
 for exact rules and reserved fields.
@@ -235,7 +235,7 @@ continues in WS-06.
 
 **Source TODOs covered:**
 
-- [`WS-PING`](web_socket.cppm) — Understand different types of pings and why we need enable_outbound_ping.
+- [`WS-PING`](web_socket.cppm) — Enforce passive Ping and active Pong deadlines.
 - [`WS-IDLE`](web_socket.cppm) — Review the idle timer and test it properly (perhaps with a local WebSocket server).
 - [`WS-OP-TIMEOUT`](web_socket.cppm) — Review async operation timeouts; reproduce a case when a timeout is triggered.
 - [`WS-CONNECT-DEADLINE`](web_socket.cpp) — Make the connection procedure time-bound (we can use default_async_operation_timeout_sec for it).
@@ -245,17 +245,35 @@ continues in WS-06.
 
 Heartbeat research, exchange requirements, and interface options are in
 [ping_work.md](ping_work.md). It distinguishes transport probes, application heartbeats,
-private-feed leases, and market-data freshness; its proposals are not yet implemented.
+private-feed leases, and market-data freshness. Parameter migration is implemented; Ping
+deadline enforcement and useful-data idle semantics remain pending.
+
+**Preparatory parameter migration — 2026-11-03:**
+
+- `active_ping` replaces the outbound enable flag and supplies `ping_period_sec`; automatic
+  Pong replies and current Ping send/completion behavior are preserved. `passive_ping` and
+  `pong_timeout_sec` are validated but their deadlines are not yet enforced.
+- `receive_watchdog` is an optional `receive_data_watchdog`, disabled by default. When enabled,
+  `timeout_sec` must be positive and defaults to 20. Existing sampling,
+  grace, whole-second rounding, and mixed receive-activity classification are preserved.
+- Both session timer objects are optional: `connect()` constructs only the enabled timers,
+  waits start after the handshake, and cancellation skips absent timers.
+- Examples and tests use the new parameters. The local TLS fixture covers enabled/disabled
+  idle monitoring, independent Ping cadence, and automatic Pong replies with idle disabled.
+
+Validation: GCC `complete` build, 18 WebSocket unit cases, and local TLS loopback checks pass.
+Symbol-provider, resubscription, exchange-feeder/app, and example-workflow checks also pass.
+Formatting, source headers, Python checks, and `git diff --check` pass.
 
 **Lifecycle follow-up from WS-02 (no separate source TODO):** make idle/ping cancellation
 consistent across peer close, read errors, explicit close, and graceful-close completion.
 In particular, peer-close/read-error paths can leave a ping wait pending until it expires.
 
-**First small step:** reproduce terminal timer cleanup with outbound pings enabled and a
+**Pending lifecycle step:** reproduce terminal timer cleanup with outbound pings enabled and a
 delegate that leaves the client alive after `on_disconnected`. Check peer close and read errors
 without an application `close()` masking the cleanup. Both timers should stop without waiting
 for the next ping interval, rearming, or emitting another terminal event. Address this lifecycle
-case before changing idle-activity policy or adding timeout settings.
+case before changing idle-activity policy or enforcing Ping/Pong deadlines.
 
 **WIP:** application connection deadlines have been removed from all examples, including the
 WebSocket example's overall response timer that also covered connection setup. An overall
@@ -269,11 +287,11 @@ the resolve/connect/handshake chain.
 
 Current behavior confirmed by inspection:
 
-- A quiet but healthy peer can be disconnected even with outbound pings disabled.
-- Received ping frames count as activity; pongs count only with outbound pings enabled.
+- Idle monitoring is disabled by default. When enabled, a quiet but healthy peer can be disconnected even with outbound pings disabled.
+- Received ping frames count as activity; pongs count only when `active_ping` is present.
 - Data activity is recorded at complete-message delivery, so a slow fragmented message can
   be making network progress without refreshing `last_recv_ts_`.
-- With defaults, idle checks run every 30 seconds and compare whole elapsed seconds against
+- With a watchdog enabled at 20 seconds, idle checks run every 30 seconds and compare whole elapsed seconds against
   24. This is periodic sampling, not an exact 24- or 30-second inactivity deadline.
 - Ping send failure logs and rearms; a failed ping timer logs and stops. Neither path directly
   establishes a terminal outcome. A successful ping send does not establish receipt of a pong.
@@ -287,8 +305,8 @@ stage improves the existing timer rather than replacing it with Beast's idle mec
 
 Implement and validate the policy explicitly:
 
-- Separate the inactivity deadline from the outbound-ping interval; define whether and how
-  inactivity checking can be disabled independently of ping sending.
+- Build on the independent optional idle timeout and Ping policies above; enforce the passive
+  Ping and active Pong deadlines without changing the useful-data idle contract implicitly.
 - Define exactly what refreshes activity: complete data messages, fragmented-message progress,
   incoming pings, and incoming pongs. Decide which of these prove the activity the caller needs;
   receiving control frames alone must not silently imply that market data is arriving.
@@ -310,7 +328,7 @@ re-enables it before removing the duplicate call and its exception-reporting bra
 changes a setup/error path and needs focused validation.
 
 Document automatic replies to peer pings separately from optional outbound pings, and state
-that idle monitoring currently runs regardless of the outbound-ping flag. TCP keepalive,
+that idle monitoring is independently enabled by `receive_watchdog`. TCP keepalive,
 WebSocket control frames, and exchange JSON/text heartbeats serve different purposes. Keep
 exchange-specific messages in the feeder/protocol layer. Do not add pong matching if the
 actual requirement is merely to observe any peer activity.
@@ -406,7 +424,7 @@ Markdown/link and diff review.
 | Source TODO ID | Complete source TODO | Owner stage |
 | --- | --- | --- |
 | [`WS-PARAMS`](web_socket.cppm) | Review parameter contracts and validation. | [WS-04](#ws-04) |
-| [`WS-PING`](web_socket.cppm) | Understand different types of pings and why we need enable_outbound_ping. | [WS-06](#ws-06) |
+| [`WS-PING`](web_socket.cppm) | Enforce passive Ping and active Pong deadlines. | [WS-06](#ws-06) |
 | [`WS-IDLE`](web_socket.cppm) | Review the idle timer and test it properly (perhaps with a local WebSocket server). | [WS-06](#ws-06) |
 | [`WS-OP-TIMEOUT`](web_socket.cppm) | Review async operation timeouts; reproduce a case when a timeout is triggered. | [WS-06](#ws-06) |
 | [`WS-LARGE-MESSAGES`](web_socket.cppm) | Test sending and receiving really big messages (e.g. a huge Coinbase initial snapshot); distinguish socket buffers from message limits. | [WS-05](#ws-05) |

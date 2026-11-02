@@ -87,6 +87,9 @@ public:
     explicit binance_spot_client(const app_config& config)
         : request_(subscription_request(config)), client_(nom::ctx(this).io.get_executor(), nom::url(config.endpoint))
     {
+        auto params = client_.params();
+        params.receive_watchdog = nom::ws_params::receive_data_watchdog{};
+        client_.update_params(params);
     }
 
     void on_request(nom::event::service_command command)

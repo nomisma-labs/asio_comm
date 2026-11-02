@@ -92,7 +92,8 @@ public:
         // This is an example policy, separate from Binance's server Ping every 3 min / 10 min Pong
         // allowance (see Connect above). Beast still answers server Pings automatically while reading.
         auto params = client_.params();
-        params.enable_outbound_ping = true;
+        params.active_ping = nom::ws_params::client_ping_probe{};
+        params.receive_watchdog = nom::ws_params::receive_data_watchdog{};
         client_.update_params(params);
     }
 

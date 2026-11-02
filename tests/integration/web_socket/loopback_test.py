@@ -256,6 +256,62 @@ def run_disconnecting_case(client, context, certificate):
         print("disconnecting: passed (write failure, rejected sends, one terminal event, no timer rearm)")
 
 
+def run_idle_case(client, context, certificate, mode):
+    errors = []
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(1)
+        listener.settimeout(8)
+        port = listener.getsockname()[1]
+
+        def serve():
+            try:
+                raw, _ = listener.accept()
+                with raw:
+                    raw.settimeout(6)
+                    with context.wrap_socket(raw, server_side=True) as connection:
+                        handshake(connection, port)
+                        if mode in ("idle_only", "idle_with_ping"):
+                            # A one-second idle setting must close before the five-second Ping period.
+                            opcode, payload = read_frame(connection)
+                            assert opcode == 0x88, "expected idle close before any outbound Ping"
+                            connection.sendall(bytes((0x88, len(payload))) + payload)
+                            return
+                        if mode == "disabled":
+                            connection.settimeout(3)
+                            try:
+                                data = connection.recv(2)
+                            except TimeoutError:
+                                pass
+                            else:
+                                raise AssertionError(f"disabled timers produced traffic or EOF: {data!r}")
+                            connection.settimeout(6)
+                        else:
+                            # Ignore Pings: cadence must not set the idle timeout, and Pong deadlines
+                            # are not enforced in this parameter-only migration.
+                            for _ in range(3):
+                                assert read_frame(connection) == (0x89, b""), "missing outbound Ping"
+                        connection.sendall(b"\x89\x05probe")
+                        assert read_frame(connection) == (0x8A, b"probe"), "missing automatic Pong"
+                        connection.sendall(b"\x81\x08accepted")
+                        assert connection.recv(1024) == b"", "idle test client did not close"
+            except BaseException as error:
+                errors.append(error)
+
+        worker = threading.Thread(target=serve, daemon=True)
+        worker.start()
+        env = dict(os.environ, SSL_CERT_FILE=str(certificate), SSL_CERT_DIR=str(certificate.parent / "empty"))
+        result = subprocess.run(
+            [client, f"wss://localhost:{port}/feed%2Fone?topic=two", mode],
+            env=env, text=True, capture_output=True, timeout=12,
+        )
+        worker.join(timeout=8)
+        assert not worker.is_alive(), f"idle {mode}: peer did not stop"
+        assert not errors, f"idle {mode}: {errors}; client: {result.stdout} {result.stderr}"
+        assert result.returncode == 0, result.stdout + result.stderr
+        print(f"idle {mode}: passed")
+
+
 def run_feeder_case(client, context, certificate, options, target, streams):
     errors, payloads = [], ['{"result":null,"id":1}']
     event_names = {"bookTicker": "bookTicker", "trade": "trade", "depth": "depthUpdate"}
@@ -318,6 +374,7 @@ def main():
     parser.add_argument("--headers-client", required=True)
     parser.add_argument("--disconnecting-client", required=True)
     parser.add_argument("--move-client", required=True)
+    parser.add_argument("--idle-client", required=True)
     parser.add_argument("--feeder-client")
     parser.add_argument("--perp-feeder-client")
     parser.add_argument("--openssl", required=True)
@@ -339,6 +396,8 @@ def main():
         run_disconnecting_case(args.disconnecting_client, context, certificate)
         for mode in ("construct", "assign", "connected", "connected_assign"):
             run_move_case(args.move_client, context, certificate, mode)
+        for mode in ("idle_only", "idle_with_ping", "disabled", "disabled_with_ping", "independent"):
+            run_idle_case(args.idle_client, context, certificate, mode)
         for client, target in ((args.feeder_client, "/ws"), (args.perp_feeder_client, "/public/ws")):
             if not client:
                 continue

@@ -149,7 +149,8 @@ public:
     {
         auto params = client_.params();
         params.max_message_size = config.max_message_size;
-        params.enable_outbound_ping = true;
+        params.active_ping = nom::ws_params::client_ping_probe{};
+        params.receive_watchdog = nom::ws_params::receive_data_watchdog{};
         client_.update_params(params);
     }
 

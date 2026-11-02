@@ -105,7 +105,8 @@ public:
         // Keep reads active for server control frames; no application JSON ping is prescribed here.
         // https://bf-lightning-api.readme.io/docs/realtime-api
         auto params = client_.params();
-        params.enable_outbound_ping = true;
+        params.active_ping = nom::ws_params::client_ping_probe{};
+        params.receive_watchdog = nom::ws_params::receive_data_watchdog{};
         client_.update_params(params);
     }
 

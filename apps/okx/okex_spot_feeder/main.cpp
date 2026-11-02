@@ -98,6 +98,9 @@ public:
         : requests_(subscription_requests(config)),
           client_(nom::ctx(this).io.get_executor(), nom::url(config.endpoint)), ping_timer_(nom::ctx(this).io)
     {
+        auto params = client_.params();
+        params.receive_watchdog = nom::ws_params::receive_data_watchdog{};
+        client_.update_params(params);
     }
 
     void on_request(nom::event::service_command command)

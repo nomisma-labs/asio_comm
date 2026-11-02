@@ -155,13 +155,14 @@ with success if already queued.
   through `parent_`; parameters, including headers, persist across reconnects and are not copied
   into the session.
   The session's `connect()` dispatches through `switch (status_)`: `init` enters `connecting`,
-  allocates setup storage, and starts DNS resolution; other states log an error and do nothing.
-  Terminal sessions are never reused. If setup allocation or DNS initiation throws, the session
+  constructs the enabled timers, allocates setup storage, and starts DNS resolution; other
+  states log an error and do nothing. Terminal sessions are never reused. If timer construction,
+  setup allocation or DNS initiation throws, the session
   becomes `conn_failed` and the original exception propagates to the caller; no delegate event
   is emitted. If replacing the delegate
   or allocating the next session throws, the existing session remains installed with its
   current status. Construction of the wrapper itself now includes allocation and construction
-  of the first session, TLS/WebSocket stream, and timers.
+  of the first session and TLS/WebSocket stream. Optional timer objects are constructed by `connect()`.
 - **`[close]`** — `web_socket::close() noexcept`: no-op in `init`; otherwise select
   or preserve the appropriate terminal state, then independently disable Beast handshake/close
   timeouts and attempt TCP close and cancellation of each application timer. Setup destruction
@@ -197,13 +198,15 @@ with success if already queued.
 
 `ws_params::validate() const` returns `std::expected<void, std::string>`. It is independent of
 session state and performs no I/O or mutation. Success is an empty expected value; failure is
-the first field diagnostic, such as `/ping_interval_sec must be positive` or
+the first field diagnostic, such as `/receive_watchdog/timeout_sec must be positive` or
 `/headers/1/name duplicates an earlier header`. Error-string allocation can still throw.
 
 | Parameter | Validation |
 | --- | --- |
 | `async_operation_timeout_sec` | Positive. |
-| `ping_interval_sec` | Positive even when outbound pings are disabled, because idle detection uses it. Setup timeout and ping interval have no required ordering. |
+| `receive_watchdog` | Optional `receive_data_watchdog`, absent by default. When enabled, `timeout_sec` must be positive and defaults to 20. Independent of Ping settings and setup timeout. |
+| `passive_ping` | Optional `server_ping_watchdog`; `ping_timeout_sec` must be positive. Defaults to absent. Deadline enforcement is pending. |
+| `active_ping` | Optional `client_ping_probe`; `ping_period_sec` and `pong_timeout_sec` must be positive. Defaults to absent. Presence enables periodic Pings; Pong deadline enforcement is pending. |
 | Socket buffer sizes | Between 1 and `INT_MAX`; OS acceptance is determined when socket options are applied. |
 | `max_message_size` | Incoming-message byte limit in `[1, UINT_MAX]`; defaults to 16 MiB. Applies to the entire message across fragments, independently of socket buffers. |
 | `agent_name` | Contains non-whitespace content, valid HTTP field-value characters, and a supported field length. |
@@ -257,11 +260,12 @@ terminal session until reconnect or destruction.
   WebSocket handshake with the owner's current `params().headers` and `agent_name`.
 - **`WsHandshakeDone`** — `on_handshake`: successful WebSocket handshake records activity, sets
   `connected` and emits `on_connected`. If still connected after the delegate returns, start
-  the read/control callbacks, idle timer and optional outbound pings. Calling `close()` or
+  the read/control callbacks and the independently optional idle/Ping timers. Calling `close()` or
   triggering a write-failure shutdown from the delegate prevents this work from starting.
 - **`ConnectError`** — diagram shorthand for an error in any of those four completions, or SNI
   setup failure inside `on_connect`. Emit `network_error`; no automatic `close()`.
-- **`ConnectStartException`** — DNS initiation throws during the caller's `connect()` invocation.
+- **`ConnectStartException`** — timer construction, setup allocation or DNS initiation throws
+  during the caller's `connect()` invocation.
   Set `conn_failed` and rethrow to that caller; no delegate event or automatic `close()`.
 - **`ConnectSetupException`** — setup or operation initiation throws inside `on_resolve`,
   `on_connect`, `on_ssl_handshake`, or the connecting-phase setup in `on_handshake`.
@@ -311,8 +315,12 @@ states and unknown status values.
 
 ### Timers and internal close request
 
-- **`PingTimerDone(ec)`** — `on_ping_timer`: a timer using `params().ping_interval_sec`
-  (20 seconds by default) when enabled, dispatched through `switch (status_)`.
+The session holds optional idle and Ping timer objects. `connect()` constructs each only
+when its policy is enabled; the waits start after a successful handshake. Cancellation
+checks whether the timer exists. Parameters can still be changed before the first connect.
+
+- **`PingTimerDone(ec)`** — `on_ping_timer`: a timer using `params().active_ping->ping_period_sec`
+  (20 seconds by default) when `active_ping` is present, dispatched through `switch (status_)`.
   Connected handles the timer started after handshake or rearmed after
   a previous ping completion: success starts one ping send. Disconnecting handles a canceled or
   queued wait after `shutdown()`; disconnected handles waits delivered after `close()`, peer
@@ -327,10 +335,12 @@ states and unknown status values.
   Other states assert, or log and return when assertions are disabled.
   The next interval starts when the send completes, without waiting for a pong. No timer is
   armed while that send is pending, so periodic ping sends cannot overlap.
-- **`IdleTimerDone(ec)`** — `on_idle_timer`: a timer scheduled for the current ping interval
-  plus half that interval (whole seconds; 30 seconds by default), dispatched through `switch (status_)`.
+- **`IdleTimerDone(ec)`** — `on_idle_timer`: armed only when `receive_watchdog` is present,
+  scheduled for `timeout_sec` plus half of it (whole seconds; 30 seconds with the watchdog's
+  default timeout), dispatched through `switch (status_)`. Monitoring is disabled by default;
+  `std::nullopt` skips the idle timer without affecting Pings.
   In connected, successful expiry requests `shutdown()` when whole seconds since receive activity
-  exceed the current ping interval plus one fifth of it (whole seconds; 24 by default); otherwise rearm.
+  exceed the idle timeout plus one fifth of it (whole seconds; 24 by default); otherwise rearm.
   Cancellation is ignored; other timer errors request shutdown.
   Disconnecting and disconnected ignore both canceled waits and already queued expiries.
   Other states assert, or log and return when assertions are disabled: the idle timer starts only
@@ -379,8 +389,10 @@ These are outputs of the current machine, shown as actions on edges:
   prevent asynchronous operations from overlapping. The receive-callback resubscription cases
   passed; [WS-03](../core/asio_comm/ws_current_work.md#ws-03) is closed as unconfirmed. Conditional
   buffering and a send gate are deferred pending a reproducible failure or an explicit API requirement.
-- **Liveness.** The idle timer runs even with outbound pings disabled and can close a healthy
-  but quiet connection. Idle detection remains owned by this client; Beast's idle timeout and
+- **Liveness.** `receive_watchdog` is disabled by default. Enabling it can close a healthy but
+  quiet connection. Its current mixed-activity policy still counts control Pings and, when
+  active probing is enabled, Pongs; useful-data-only monitoring remains pending.
+  Idle detection remains owned by this client; Beast's idle timeout and
   automatic idle pings stay disabled. The activity definition, deadline scheduling, and timer
   cancellation/error behavior are scheduled for review in
   [WS-06](../core/asio_comm/ws_current_work.md#ws-06). DNS has no library deadline; an overall

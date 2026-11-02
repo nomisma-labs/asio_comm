@@ -199,7 +199,7 @@ TEST_CASE("Parameter copy failure preserves all installed settings")
     auto candidate = original;
     candidate.headers.front().value.assign(128, 'x');
     candidate.agent_name.assign(128, 'a');
-    candidate.ping_interval_sec = 5;
+    candidate.receive_watchdog = nom::ws_params::receive_data_watchdog{.timeout_sec = 5};
     for (const unsigned permitted_allocations : {0u, 1u, 2u})
     {
         CAPTURE(permitted_allocations);
@@ -220,7 +220,7 @@ TEST_CASE("Parameter copy failure preserves all installed settings")
         REQUIRE(caught_original);
         CHECK(client.params().headers.front().value == "original");
         CHECK(client.params().agent_name == "original-agent");
-        CHECK(client.params().ping_interval_sec == original.ping_interval_sec);
+        CHECK_FALSE(client.params().receive_watchdog);
         CHECK(client.session_id() == id);
         CHECK(client.status() == nom::ws_status::init);
         CHECK(io.poll() == 0);

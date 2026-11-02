@@ -15,6 +15,8 @@ if(nom_build_tests AND TARGET web_socket_example)
             DEPS Boost::headers nom::asio_comm nom::spd_logger)
         nom_app(asio_comm_move_client IMPORT_STD SOURCES web_socket/move_test.cxx
             DEPS Boost::headers nom::asio_comm nom::spd_logger)
+        nom_app(asio_comm_idle_client IMPORT_STD SOURCES web_socket/idle_test.cxx
+            DEPS Boost::headers nom::asio_comm nom::spd_logger)
         nom_app(asio_comm_large_messages_client IMPORT_STD SOURCES web_socket/large_messages_test.cxx
             DEPS Boost::headers nom::asio_comm nom::spd_logger)
     endblock()
@@ -33,6 +35,7 @@ if(nom_build_tests AND TARGET web_socket_example)
             --client $<TARGET_FILE:web_socket_example>
             --headers-client $<TARGET_FILE:asio_comm_headers_client>
             --move-client $<TARGET_FILE:asio_comm_move_client>
+            --idle-client $<TARGET_FILE:asio_comm_idle_client>
             --disconnecting-client $<TARGET_FILE:asio_comm_disconnecting_client> --openssl ${openssl_executable}
             ${binance_feeder_args})
     set_tests_properties(${PROJECT_NAME}_web_socket_loopback PROPERTIES LABELS integration TIMEOUT 60)

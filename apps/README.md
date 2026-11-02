@@ -5,8 +5,22 @@
 Exchange applications live under `apps/<exchange>/<app>/` (for example, `apps/binance/binance_spot_feeder/`).
 Executable and CMake target names are unchanged. General examples stay directly under `apps/`.
 
+Feeders and symbol providers are included in the default builds for `complete`, `release`,
+`clang`, `asan`, and `ci`. The `dev` default build skips them, including `./bootstrap.sh dev`,
+but each target remains available explicitly:
+
+```sh
+cmake --preset dev
+cmake --build --preset dev --target binance_spot_feeder binance_spot_symbol_provider
+```
+
 The tables track the target exchange coverage. App links identify implemented examples; skipped symbol
 providers include the reason and API reference. Unverified hosting cells remain explicit. Existing market subdivisions remain separate.
+
+All feeders enable `receive_watchdog` with its default timeout of 20 seconds. Symbol providers
+and other examples leave it disabled (`std::nullopt`). The current watchdog counts receive activity,
+including some control frames; useful-data monitoring is planned separately (see
+[WebSocket timer behavior](../core/asio_comm/ping_work.md)).
 
 ## Market-data feeders
 

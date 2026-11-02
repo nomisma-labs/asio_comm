@@ -119,8 +119,9 @@ int main(int argc, char** argv)
             else if (attempt == 2)
             {
                 // Headers and agent persist; the peer also checks repeated configured outbound pings.
-                params.enable_outbound_ping = true;
-                params.ping_interval_sec = 1;
+                params.active_ping = nom::ws_params::client_ping_probe{};
+                params.active_ping->ping_period_sec = 1;
+                params.receive_watchdog = nom::ws_params::receive_data_watchdog{.timeout_sec = 1};
                 client.update_params(params);
                 client.connect(client.callbacks());
             }
