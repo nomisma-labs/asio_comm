@@ -13,6 +13,7 @@ module;
 #include <boost/beast/websocket.hpp>
 #include <boost/beast/websocket/ssl.hpp>
 #include <cassert>
+#include <fmt/ostream.h>
 
 module nom.asio_comm;
 
@@ -148,6 +149,37 @@ namespace nom
                     return std::unexpected(path + "/name duplicates an earlier header");
         }
         return {};
+    }
+
+    std::ostream& operator<<(std::ostream& os, const ws_params& params)
+    {
+        os << "{agent_name=" << std::format("{:?}", params.agent_name) << ", header_names=[";
+        for (std::size_t i = 0; i < params.headers.size(); ++i)
+        {
+            if (i != 0)
+                os << ", ";
+            os << std::format("{:?}", params.headers[i].name);
+        }
+        os << "], socket_send_buf_size=" << params.socket_send_buf_size
+           << ", socket_recv_buf_size=" << params.socket_recv_buf_size
+           << ", max_message_size=" << params.max_message_size
+           << ", async_operation_timeout_sec=" << params.async_operation_timeout_sec << ", passive_ping=";
+        if (params.passive_ping)
+            os << "{ping_timeout_sec=" << params.passive_ping->ping_timeout_sec << '}';
+        else
+            os << "disabled";
+        os << ", active_ping=";
+        if (params.active_ping)
+            os << "{ping_period_sec=" << params.active_ping->ping_period_sec
+               << ", pong_timeout_sec=" << params.active_ping->pong_timeout_sec << '}';
+        else
+            os << "disabled";
+        os << ", receive_watchdog=";
+        if (params.receive_watchdog)
+            os << "{timeout_sec=" << params.receive_watchdog->timeout_sec << '}';
+        else
+            os << "disabled";
+        return os << '}';
     }
 
     struct web_socket::io_state
@@ -297,7 +329,7 @@ namespace nom
 
                 try
                 {
-                    // Parameters are fixed for this attempt; disabled policies need no timer objects.
+                    LINFO("{} connecting with params {}", id(), fmt::streamed(parent_->params_));
                     if (parent_->params_.receive_watchdog)
                         receive_watchdog_timer_.emplace(parent_->io_->executor);
                     if (parent_->params_.active_ping)
@@ -573,10 +605,7 @@ namespace nom
                     break;
 
                 if (active_ping_timer_)
-                {
-                    LDEBUG("{} Enable outbound ping", id());
                     start_ping_timer();
-                }
 
                 // The stream owns this callback; pending operations keep the session alive.
                 stream_.control_callback(beast::bind_front_handler(&session::on_control, this));
@@ -610,14 +639,12 @@ namespace nom
                 case websocket::frame_type::ping:
                 {
                     last_recv_ts_ = std::chrono::steady_clock::now();
-                    LDEBUG("{} Ping request received from server", id());
                     break;
                 }
                 case websocket::frame_type::pong:
                 {
                     if (parent_->params_.active_ping)
                         last_recv_ts_ = std::chrono::steady_clock::now();
-                    LDEBUG("{} Pong response received from server", id());
                     break;
                 }
                 case websocket::frame_type::close:
@@ -677,7 +704,6 @@ namespace nom
                     break;
                 }
 
-                LDEBUG("{} Sending ping to server", id());
                 stream_.async_ping({}, beast::bind_front_handler(&session::on_ping, shared_from_this()));
                 break;
             }

@@ -122,6 +122,8 @@ export namespace nom
         [[nodiscard]] std::expected<void, std::string> validate() const;
     };
 
+    std::ostream& operator<<(std::ostream& os, const ws_params& params);
+
     class web_socket;
     namespace detail
     {

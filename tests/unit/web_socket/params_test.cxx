@@ -10,6 +10,33 @@ import std;
 import nom.asio_comm;
 import nom.spd_logger;
 
+TEST_CASE("WebSocket parameter diagnostics describe policies without exposing header values")
+{
+    nom::ws_params params;
+    params.headers = {{"Authorization", "Bearer private-token"}, {"X-Custom-Key", "private-api-key"}};
+    std::ostringstream disabled;
+    CHECK(&(disabled << params) == &disabled);
+    const auto disabled_text = disabled.str();
+    CHECK(disabled_text.contains("passive_ping=disabled"));
+    CHECK(disabled_text.contains("active_ping=disabled"));
+    CHECK(disabled_text.contains("receive_watchdog=disabled"));
+    CHECK(disabled_text.contains(R"(header_names=["Authorization", "X-Custom-Key"])"));
+    CHECK_FALSE(disabled_text.contains("private-token"));
+    CHECK_FALSE(disabled_text.contains("private-api-key"));
+
+    params.passive_ping = nom::ws_params::server_ping_watchdog{.ping_timeout_sec = 60};
+    params.active_ping = nom::ws_params::client_ping_probe{.ping_period_sec = 5, .pong_timeout_sec = 10};
+    params.receive_watchdog = nom::ws_params::receive_data_watchdog{.timeout_sec = 30};
+    std::ostringstream enabled;
+    enabled << params;
+    const auto enabled_text = enabled.str();
+    CHECK(enabled_text.contains("passive_ping={ping_timeout_sec=60}"));
+    CHECK(enabled_text.contains("active_ping={ping_period_sec=5, pong_timeout_sec=10}"));
+    CHECK(enabled_text.contains("receive_watchdog={timeout_sec=30}"));
+    CHECK_FALSE(enabled_text.contains("private-token"));
+    CHECK_FALSE(enabled_text.contains("private-api-key"));
+}
+
 TEST_CASE("WebSocket parameter validation checks numeric bounds")
 {
     nom::ws_params params;

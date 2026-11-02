@@ -159,7 +159,9 @@ def check_provider(client, context, cert):
         assert connection.recv(1024) == b'', 'catalog provider did not close'
 
     stdout, _ = run_peer(client, context, cert, [], serve, 0)
-    assert stdout == encoded + b'\n', (client.name, stdout)
+    connection_log, separator, output = stdout.partition(b'\n')
+    assert separator and b' connecting with params {' in connection_log, (client.name, stdout)
+    assert output == encoded + b'\n', (client.name, stdout)
 
     def error(connection):
         read_frame(connection)
@@ -167,7 +169,9 @@ def check_provider(client, context, cert):
         assert connection.recv(1024) == b''
 
     stdout, stderr = run_peer(client, context, cert, [], error, 1)
-    assert not stdout and b'API error' in stderr, (client.name, stdout, stderr)
+    connection_log, separator, output = stdout.partition(b'\n')
+    assert separator and b' connecting with params {' in connection_log, (client.name, stdout)
+    assert not output and b'API error' in stderr, (client.name, stdout, stderr)
 
     # An acknowledgement without a catalog must never become a successful empty result.
     def ack_only(connection):
@@ -175,7 +179,9 @@ def check_provider(client, context, cert):
         message(connection, ack)
 
     stdout, _ = run_peer(client, context, cert, [], ack_only, 1)
-    assert not stdout
+    connection_log, separator, output = stdout.partition(b'\n')
+    assert separator and b' connecting with params {' in connection_log, (client.name, stdout)
+    assert not output, (client.name, stdout)
     print(client.name, 'catalog, fragmented input, ack exclusion and API errors passed', flush=True)
 
 

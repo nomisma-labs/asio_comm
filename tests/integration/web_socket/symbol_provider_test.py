@@ -83,6 +83,10 @@ def run_peer(context, certificate, client, arguments, serve, expected_code):
         assert not thread.is_alive(), 'TLS peer did not finish'
         assert not errors, (errors, result.returncode, result.stderr, result.stdout[:1000])
         assert result.returncode == expected_code, (result.returncode, result.stderr, result.stdout[:1000])
+        # Check the connection diagnostic separately from the exact application payload below.
+        connection_log, separator, output = result.stdout.partition(b'\n')
+        assert separator and b' connecting with params {' in connection_log, result.stdout[:1000]
+        result.stdout = output
         return result
 
 
