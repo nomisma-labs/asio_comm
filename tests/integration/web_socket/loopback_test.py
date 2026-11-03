@@ -16,6 +16,7 @@ import struct
 import subprocess
 import tempfile
 import threading
+import time
 
 
 def receive_exact(connection, count):
@@ -199,11 +200,11 @@ def run_headers_case(client, context, certificate):
                                 assert connection.recv(1024) == b"", "unexpected data after rejected upgrade"
                                 continue
                             if attempt == 2:
-                                # Repeated pings verify that completion rearms the timer.
+                                # Repeated probes and data exercise independent Ping and receive watchdog activity.
                                 for _ in range(3):
                                     opcode, payload = read_frame(connection)
                                     assert opcode == 0x89 and payload, "expected configured outbound ping"
-                                    connection.sendall(bytes((0x8a, len(payload))) + payload)
+                                    connection.sendall(bytes((0x8a, len(payload))) + payload + b"\x81\x08progress")
                             connection.sendall(b"\x81\x08accepted")
                             assert connection.recv(1024) == b"", "unexpected data after client close"
             except BaseException as error:
@@ -273,8 +274,33 @@ def run_receive_watchdog_case(client, context, certificate, mode):
                     raw.settimeout(6)
                     with context.wrap_socket(raw, server_side=True) as connection:
                         handshake(connection, port)
+                        if mode == "control_ping":
+                            # Server Pings keep the passive policy healthy without refreshing data activity.
+                            pongs = 0
+                            while True:
+                                connection.sendall(b"\x89\x05probe")
+                                opcode, payload = read_frame(connection)
+                                if opcode == 0x88:
+                                    assert pongs >= 3, "expected repeated server Pings before watchdog close"
+                                    connection.sendall(bytes((0x88, len(payload))) + payload)
+                                    return
+                                assert (opcode, payload) == (0x8a, b"probe"), "missing automatic Pong"
+                                pongs += 1
+                                time.sleep(0.3)
+                        if mode == "control_pong":
+                            # Answer active probes successfully; the receive watchdog must still close.
+                            pings = 0
+                            while True:
+                                opcode, payload = read_frame(connection)
+                                if opcode == 0x88:
+                                    assert pings >= 1, "expected an active probe before watchdog close"
+                                    connection.sendall(bytes((0x88, len(payload))) + payload)
+                                    return
+                                assert opcode == 0x89 and payload, "missing active Ping"
+                                pings += 1
+                                connection.sendall(bytes((0x8a, len(payload))) + payload)
                         if mode in ("receive_watchdog_only", "receive_watchdog_with_ping"):
-                            # A one-second receive watchdog setting must close before the five-second Ping period.
+                            # A two-second receive watchdog setting must close before the five-second Ping period.
                             opcode, payload = read_frame(connection)
                             assert opcode == 0x88, "expected receive watchdog close before any outbound Ping"
                             connection.sendall(bytes((0x88, len(payload))) + payload)
@@ -399,7 +425,8 @@ def main():
         run_disconnecting_case(args.disconnecting_client, context, certificate)
         for mode in ("construct", "assign", "connected", "connected_assign"):
             run_move_case(args.move_client, context, certificate, mode)
-        for mode in ("receive_watchdog_only", "receive_watchdog_with_ping", "disabled", "disabled_with_ping", "independent"):
+        for mode in ("receive_watchdog_only", "receive_watchdog_with_ping", "disabled", "disabled_with_ping", "independent",
+                     "control_ping", "control_pong"):
             run_receive_watchdog_case(args.receive_watchdog_client, context, certificate, mode)
         for client, target in ((args.feeder_client, "/ws"), (args.perp_feeder_client, "/public/ws")):
             if not client:

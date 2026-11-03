@@ -22,8 +22,9 @@ int main(int argc, char** argv)
     {
         nom::init_logger(nom::main_logger);
         const std::string_view mode(argv[2]);
-        const bool expect_receive_watchdog_close =
-            mode == "receive_watchdog_only" || mode == "receive_watchdog_with_ping";
+        const bool expect_receive_watchdog_close = mode == "receive_watchdog_only" ||
+                                                   mode == "receive_watchdog_with_ping" || mode == "control_ping" ||
+                                                   mode == "control_pong";
         if (!expect_receive_watchdog_close && mode != "disabled" && mode != "disabled_with_ping" &&
             mode != "independent")
             return 1;
@@ -32,12 +33,14 @@ int main(int argc, char** argv)
         nom::web_socket client(io.get_executor(), nom::url(argv[1]));
         auto params = client.params();
         if (expect_receive_watchdog_close)
-            params.receive_watchdog = nom::ws_params::receive_data_watchdog{.timeout_sec = 1};
+            params.receive_watchdog = nom::ws_params::receive_data_watchdog{.timeout_sec = 2};
         else if (mode == "independent")
             params.receive_watchdog = nom::ws_params::receive_data_watchdog{.timeout_sec = 5};
-        if (mode != "receive_watchdog_only" && mode != "disabled")
+        if (mode != "receive_watchdog_only" && mode != "disabled" && mode != "control_ping")
             params.active_ping = nom::ws_params::client_ping_probe{
                 .ping_period_sec = mode == "receive_watchdog_with_ping" ? 5u : 1u, .pong_timeout_sec = 1};
+        if (mode == "control_ping")
+            params.passive_ping = nom::ws_params::server_ping_watchdog{.ping_timeout_sec = 1};
         client.update_params(params);
 
         boost::asio::steady_timer deadline(io);
@@ -71,7 +74,7 @@ int main(int argc, char** argv)
                     ++disconnected;
                     const auto elapsed = event.ts - connected_at;
                     if (!expect_receive_watchdog_close || client.status() != nom::ws_status::disconnected ||
-                        elapsed < std::chrono::seconds(1) || elapsed >= std::chrono::seconds(5))
+                        elapsed < std::chrono::seconds(2) || elapsed >= std::chrono::milliseconds(2750))
                         fail("Unexpected disconnection or receive watchdog timing");
                     else
                         finish();

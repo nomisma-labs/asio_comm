@@ -55,7 +55,7 @@ TEST_CASE("WebSocket parameter validation checks numeric bounds")
 
     CHECK_FALSE(params.receive_watchdog);
     params.receive_watchdog = nom::ws_params::receive_data_watchdog{};
-    CHECK(params.receive_watchdog->timeout_sec == 20);
+    CHECK(params.receive_watchdog->timeout_sec == 30);
     REQUIRE(params.validate().has_value());
     params.receive_watchdog->timeout_sec = 0;
     REQUIRE_FALSE(params.validate());

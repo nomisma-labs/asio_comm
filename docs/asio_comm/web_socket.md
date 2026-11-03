@@ -206,7 +206,7 @@ the first field diagnostic, such as `/receive_watchdog/timeout_sec must be posit
 | Parameter | Validation |
 | --- | --- |
 | `async_operation_timeout_sec` | Positive. Bounds TCP connect/TLS setup and, independently, each active Ping write. |
-| `receive_watchdog` | Optional `receive_data_watchdog`, absent by default. When enabled, `timeout_sec` must be positive and defaults to 20. Independent of Ping settings and setup timeout. |
+| `receive_watchdog` | Optional `receive_data_watchdog`, absent by default. When enabled, `timeout_sec` must be positive and defaults to 30. Independent of Ping settings and setup timeout. |
 | `passive_ping` | Optional `server_ping_watchdog`; `ping_timeout_sec` must be positive. Defaults to absent. Enforces a server control Ping deadline from handshake completion and after each received Ping. |
 | `active_ping` | Optional `client_ping_probe`; `ping_period_sec` and `pong_timeout_sec` must be positive. Defaults to absent. Presence enables one control probe at a time, with a Pong deadline from successful write completion. Every control Pong is an event: it starts the next interval in `send_done`, or fails the probe in `waiting_to_ping` / `sending_ping`, regardless of payload. |
 | Socket buffer sizes | Between 1 and `INT_MAX`; OS acceptance is determined when socket options are applied. |
@@ -286,7 +286,8 @@ terminal session until reconnect or destruction.
 - **`ControlFrame(kind)`** — `on_control`: `ping`, `pong` or `close`, dispatched through
   `switch (status_)`. Connected and disconnecting share frame handling: the handshake started
   reading, and pending operations may still process control frames after `shutdown()` starts.
-  Ping updates receive activity; pong does so only when outbound pings are enabled. Close cancels
+  Ping refreshes the enabled passive deadline; Pong is dispatched to enabled active probing.
+  Neither refreshes the receive watchdog. Close cancels
   enabled timers, sets `disconnected` and emits `on_disconnected` (`Closed by server`).
   Disconnected callbacks are ignored after `close()`, a prior peer close, a read error, or
   `on_shutdown()`. Other states assert, or log and return when assertions are disabled.
@@ -346,12 +347,15 @@ checks whether the timer exists. Parameters can still be changed before the firs
   also disconnect, with distinct diagnostic reasons. Every close/error path cancels probing;
   canceled or superseded waits and late completions cannot rearm a terminal session.
 - **`IdleTimerDone(ec)`** — `on_receive_watchdog_timer`: armed only when `receive_watchdog` is present,
-  scheduled for `timeout_sec` plus half of it (whole seconds; 30 seconds with the watchdog's
-  default timeout), dispatched through `switch (status_)`. Monitoring is disabled by default;
+  scheduled every `timeout_sec` (30 seconds with the enabled watchdog's default timeout),
+  dispatched through `switch (status_)`. Monitoring is disabled by default;
   `std::nullopt` skips the idle timer without affecting Pings.
-  In connected, successful expiry requests `shutdown()` when whole seconds since receive activity
-  exceed the idle timeout plus one fifth of it (whole seconds; 24 by default); otherwise rearm.
+  In connected, successful expiry requests `shutdown()` when the full elapsed duration since the
+  last complete data message (or connection if none has arrived) exceeds `timeout_sec`;
+  otherwise rearm. There is no grace or tolerance. Data receipt does not reschedule a check.
   Cancellation is ignored; other timer errors request shutdown.
+  Graceful shutdown is intentional for data inactivity. The watchdog log records the cause;
+  `on_disconnected` reports the existing close result, without a dedicated watchdog reason.
   Disconnecting and disconnected ignore both canceled waits and already queued expiries.
   Other states assert, or log and return when assertions are disabled: the idle timer starts only
   after a successful handshake, and sessions are never reused.
@@ -402,8 +406,9 @@ These are outputs of the current machine, shown as actions on edges:
   passed; [WS-03](../../core/asio_comm/ws_current_work.md#ws-03) is closed as unconfirmed. Conditional
   buffering and a send gate are deferred pending a reproducible failure or an explicit API requirement.
 - **Liveness.** `receive_watchdog` is disabled by default. Enabling it can close a healthy but
-  quiet connection. Its current mixed-activity policy still counts control Pings and, when
-  active probing is enabled, Pongs; useful-data-only monitoring remains pending.
+  quiet connection. Only complete data messages refresh it; control Pings/Pongs and partial
+  fragments do not. Application heartbeats still count as data messages; distinguishing useful
+  market data requires exchange-adapter participation.
   Idle detection remains owned by this client; Beast's idle timeout and
   automatic idle pings stay disabled. The activity definition, deadline scheduling, and timer
   cancellation/error behavior are scheduled for review in

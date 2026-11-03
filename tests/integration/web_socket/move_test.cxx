@@ -32,7 +32,7 @@ int main(int argc, char** argv)
         params.headers = {{.name = "X-Move", .value = "source"}};
         params.active_ping = nom::ws_params::client_ping_probe{};
         params.active_ping->ping_period_sec = 1;
-        params.receive_watchdog = nom::ws_params::receive_data_watchdog{.timeout_sec = 1};
+        params.receive_watchdog = nom::ws_params::receive_data_watchdog{.timeout_sec = 2};
         source.update_params(params);
         std::optional<nom::web_socket> destination;
         nom::web_socket* expected_owner = &source;

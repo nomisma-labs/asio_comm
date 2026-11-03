@@ -13,6 +13,7 @@ module;
 #include <boost/beast/websocket.hpp>
 #include <boost/beast/websocket/ssl.hpp>
 #include <cassert>
+#include <fmt/chrono.h>
 #include <fmt/ostream.h>
 
 module nom.asio_comm;
@@ -506,10 +507,10 @@ namespace nom
                     notify_error("Connect/Handshake error", ec.message());
                     break;
                 }
-                last_recv_ts_ = std::chrono::steady_clock::now();
+                last_data_recv_ts_ = std::chrono::steady_clock::now();
                 LDEBUG("{} connected", id());
                 set_status<ws_status::connected>();
-                delegate_(*parent_, event::on_connected{.ts = last_recv_ts_});
+                delegate_(*parent_, event::on_connected{.ts = last_data_recv_ts_});
                 // The delegate may call close() or trigger a write-failure shutdown before receive/timer work starts.
                 if (ws_status::connected != status_)
                     break;
@@ -521,7 +522,7 @@ namespace nom
                 stream_.control_callback(beast::bind_front_handler(&session::on_control, this));
 
                 if (passive_ping_timer_)
-                    start_passive_ping_timer(last_recv_ts_);
+                    start_passive_ping_timer(last_data_recv_ts_);
                 stream_.async_read(buffer_, beast::bind_front_handler(&session::on_receive, shared_from_this()));
                 if (receive_watchdog_timer_)
                     start_receive_watchdog_timer();
@@ -550,18 +551,14 @@ namespace nom
                 {
                 case websocket::frame_type::ping:
                 {
-                    last_recv_ts_ = std::chrono::steady_clock::now();
                     if (ws_status::connected == status_ && passive_ping_timer_)
-                        start_passive_ping_timer(last_recv_ts_);
+                        start_passive_ping_timer(std::chrono::steady_clock::now());
                     break;
                 }
                 case websocket::frame_type::pong:
                 {
                     if (active_ping_)
-                    {
-                        last_recv_ts_ = std::chrono::steady_clock::now();
                         on_active_pong(payload);
-                    }
                     break;
                 }
                 case websocket::frame_type::close:
@@ -644,9 +641,7 @@ namespace nom
         {
             assert(receive_watchdog_timer_ && parent_->params_.receive_watchdog);
             const auto receive_watchdog_timeout_sec = parent_->params_.receive_watchdog->timeout_sec;
-            const auto receive_watchdog_grace_period_sec = receive_watchdog_timeout_sec / 2;
-            receive_watchdog_timer_->expires_after(std::chrono::seconds{receive_watchdog_timeout_sec} +
-                                                   std::chrono::seconds{receive_watchdog_grace_period_sec});
+            receive_watchdog_timer_->expires_after(std::chrono::seconds{receive_watchdog_timeout_sec});
             receive_watchdog_timer_->async_wait(
                 beast::bind_front_handler(&session::on_receive_watchdog_timer, shared_from_this()));
         }
@@ -881,20 +876,14 @@ namespace nom
                 }
 
                 assert(parent_->params_.receive_watchdog);
-                const auto receive_watchdog_timeout_sec = parent_->params_.receive_watchdog->timeout_sec;
-                const auto receive_watchdog_tolerance_sec = receive_watchdog_timeout_sec / 5;
+                using namespace std::chrono;
 
-                const auto diff_ts =
-                    std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - last_recv_ts_)
-                        .count();
-
-                if (const bool receive_watchdog_expired =
-                        std::chrono::seconds{diff_ts} > std::chrono::seconds{receive_watchdog_timeout_sec} +
-                                                            std::chrono::seconds{receive_watchdog_tolerance_sec};
-                    receive_watchdog_expired)
+                const auto elapsed = steady_clock::now() - last_data_recv_ts_;
+                if (elapsed > seconds{parent_->params_.receive_watchdog->timeout_sec})
                 {
-                    LWARN(
-                        "{} Receive watchdog timer expired: no tracked receive activity for {} seconds", id(), diff_ts);
+                    LWARN("{} Receive watchdog timer expired: no complete data message for {}",
+                          id(),
+                          duration_cast<milliseconds>(elapsed));
                     shutdown();
                     break;
                 }
@@ -962,10 +951,10 @@ namespace nom
                 }
 
                 const auto mutable_buffer = buffer_.data(); // Non-owning view; no payload copy.
-                last_recv_ts_ = std::chrono::steady_clock::now();
+                last_data_recv_ts_ = std::chrono::steady_clock::now();
 
                 delegate_(*parent_,
-                          event::ws_data{.ts = last_recv_ts_,
+                          event::ws_data{.ts = last_data_recv_ts_,
                                          .data = std::span<const char>(static_cast<char*>(mutable_buffer.data()),
                                                                        mutable_buffer.size())});
                 buffer_.consume(buffer_.size());
@@ -1079,7 +1068,7 @@ namespace nom
         std::unique_ptr<setup_state> setup_;
         websocket::stream<ws_tls_stream> stream_;
         beast::flat_buffer buffer_;
-        network_timestamp last_recv_ts_{};
+        network_timestamp last_data_recv_ts_{};
         std::optional<net::steady_timer> receive_watchdog_timer_;
         std::optional<active_ping> active_ping_;
         std::optional<net::steady_timer> passive_ping_timer_;

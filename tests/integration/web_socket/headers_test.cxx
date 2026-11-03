@@ -30,6 +30,7 @@ int main(int argc, char** argv)
         bool accepted = false;
         unsigned connected = 0;
         unsigned network_errors = 0;
+        unsigned data_updates = 0;
         bool expected_failure = false;
         std::string_view expected_description;
         const auto finish = [&]
@@ -47,6 +48,11 @@ int main(int argc, char** argv)
                 }
                 else if constexpr (std::same_as<event_type, nom::event::ws_data>)
                 {
+                    if (event.sv_data() == "progress")
+                    {
+                        ++data_updates;
+                        return;
+                    }
                     accepted = event.sv_data() == "accepted";
                     finish();
                 }
@@ -75,6 +81,7 @@ int main(int argc, char** argv)
             accepted = false;
             connected = 0;
             network_errors = 0;
+            data_updates = 0;
             expected_failure = false;
             expected_description = "Connect/Handshake error";
             deadline.expires_after(std::chrono::seconds(5));
@@ -121,7 +128,7 @@ int main(int argc, char** argv)
                 // Headers and agent persist; the peer also checks repeated configured outbound pings.
                 params.active_ping = nom::ws_params::client_ping_probe{};
                 params.active_ping->ping_period_sec = 1;
-                params.receive_watchdog = nom::ws_params::receive_data_watchdog{.timeout_sec = 1};
+                params.receive_watchdog = nom::ws_params::receive_data_watchdog{.timeout_sec = 2};
                 client.update_params(params);
                 client.connect(client.callbacks());
             }
@@ -151,6 +158,8 @@ int main(int argc, char** argv)
                 return 1;
 
             io.run();
+            if (data_updates != (attempt == 2 ? 3u : 0u))
+                return 1;
             if (attempt == 3)
             {
                 if (!expected_failure || network_errors != 1 || connected != 0 || accepted)

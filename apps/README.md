@@ -17,9 +17,10 @@ cmake --build --preset dev --target binance_spot_feeder binance_spot_symbol_prov
 The tables track the target exchange coverage. App links identify implemented examples; skipped symbol
 providers include the reason and API reference. Unverified hosting cells remain explicit. Existing market subdivisions remain separate.
 
-All feeders enable `receive_watchdog` with its default timeout of 20 seconds. Symbol providers
-and other examples leave it disabled (`std::nullopt`). The current watchdog counts receive activity,
-including some control frames; useful-data monitoring is planned separately (see
+All feeders enable `receive_watchdog` with its default timeout of 30 seconds. Symbol providers
+and other examples leave it disabled (`std::nullopt`). The watchdog counts complete data messages,
+excluding control Pings/Pongs. Application heartbeats still count as data; useful market-data monitoring
+requires exchange-specific classification (see
 [WebSocket timer behavior](../core/asio_comm/ping_work.md)).
 
 ## Market-data feeders

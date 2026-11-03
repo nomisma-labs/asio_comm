@@ -99,7 +99,7 @@ keepalive Pings are disabled by the client timeout settings.
 These three diagrams start after a successful handshake and an `on_connected` callback that
 leaves the session connected. They describe concurrent operations, not additional session
 states. `P` means `active_ping->ping_period_sec` (default when enabled: 20), and `N` means
-`receive_watchdog->timeout_sec` (20 when enabled; the watchdog is absent by default).
+`receive_watchdog->timeout_sec` (30 when enabled; the watchdog is absent by default).
 These durations, `active_ping->pong_timeout_sec` (`T` below), `async_operation_timeout_sec` (`S`), and
 `passive_ping->ping_timeout_sec` are independent. Enabled policies start after the handshake.
 The passive deadline is measured from handshake completion, then from each server control Ping;
@@ -113,7 +113,7 @@ stateDiagram-v2
     state "Beast: async_read pending" as Reading
     state "Session: disconnected" as Disconnected
     Reading --> Reading : Ping / Beast replies Pong, session refreshes passive deadline if enabled
-    Reading --> Reading : Pong / if active_ping enabled, dispatch probe event and record activity
+    Reading --> Reading : Pong / if active_ping enabled, dispatch probe event
     Reading --> Reading : Complete data / session records activity, delivers ws_data, rearms read
     Reading --> Disconnected : peer Close or read error / notify on_disconnected
     Reading --> Disconnected : passive deadline expires / close transport, notify timeout reason
@@ -145,7 +145,7 @@ stateDiagram-v2
     Disconnected --> [*]
 ```
 
-**C. Receive-activity watchdog — the session checks inactivity and initiates shutdown**
+**C. Receive-data watchdog — the session checks inactivity and initiates shutdown**
 
 ```mermaid
 stateDiagram-v2
@@ -154,13 +154,13 @@ stateDiagram-v2
     state "No idle timer" as IdleOff
     IdleEnabled --> IdleOff : receive_watchdog is absent (default)
     IdleEnabled --> IdleWait : receive_watchdog is present
-    state "Session: wait N + floor(N / 2) seconds" as IdleWait
-    state "Check elapsed time since last_recv_ts_" as IdleCheck
+    state "Session: wait N seconds" as IdleWait
+    state "Check time since last complete data message or connection" as IdleCheck
     state "Session: disconnecting" as Disconnecting
     state "Session: disconnected" as Disconnected
     IdleWait --> IdleCheck : session.on_receive_watchdog_timer
-    IdleCheck --> IdleWait : elapsed seconds at most N + floor(N / 5)
-    IdleCheck --> Disconnecting : inactivity exceeds threshold / shutdown()
+    IdleCheck --> IdleWait : data inactivity at most N seconds
+    IdleCheck --> Disconnecting : data inactivity exceeds N seconds / shutdown()
     IdleWait --> Disconnecting : idle timer error other than cancellation / shutdown()
     note right of Disconnecting
         Session cancels enabled timers.
@@ -182,13 +182,14 @@ once the session is disconnecting or disconnected.
   the probe. Timeout aborts and reports `Active Ping send timeout: write did not complete within N seconds`
   or `Active Pong timeout: no Pong within N seconds`.
   Write/timer errors also abort with a reason.
-- **The current idle check is a mixed-activity check.** Complete data messages and server
-  Pings refresh `last_recv_ts_`; any Pong does so when `active_ping` is present. This watchdog
-  alone cannot detect missing Pings/Pongs while data keeps arriving; `passive_ping` independently
-  enforces server Pings. Partial data progress
-  does not refresh the timestamp. With a watchdog enabled at 20 s, the check runs every 30 s and closes when
-  whole elapsed seconds exceed 24; it is not a precise 24 s deadline. Expiry logs the idle
-  cause, but the disconnection event does not preserve a dedicated idle-timeout reason.
+- **The receive watchdog tracks complete data messages.** Its baseline is set at connection
+  and refreshed only by complete data receipt. Control Pings/Pongs and partial-message progress
+  do not refresh it; active/passive Ping policies operate independently.
+  Checks run every `timeout_sec` (default 30 s), with no grace or tolerance. An unrounded
+  inactivity duration exceeding the timeout initiates graceful shutdown. This remains periodic
+  sampling: data receipt does not reschedule the next check. Waiting for the close handshake
+  is intentional for data inactivity. The existing watchdog log records the cause;
+  `on_disconnected` retains its close-result reason without a dedicated watchdog reason.
   `receive_watchdog` is absent by default, so no idle timer runs. Enabling a `receive_data_watchdog`
   requires a positive `timeout_sec`; disabling it does not disable outgoing Pings or automatic Pong replies.
 - **Terminal cleanup cancels all enabled policies.** Explicit close, peer Close, read errors,
@@ -205,9 +206,10 @@ in [web_socket.cpp](web_socket.cpp).
 Beast ownership is documented in [control-frame handling](https://www.boost.org/doc/libs/latest/libs/beast/doc/html/beast/using_websocket/control_frames.html)
 and [Ping write completion](https://www.boost.org/doc/libs/latest/libs/beast/doc/html/beast/ref/boost__beast__websocket__stream/async_ping.html).
 
-**Target distinction:** the future data-idle policy tracks useful data and must remain
-independent of control Ping/Pong health. The mixed-activity behavior above is the current
-implementation, not that intended contract. Data-idle details remain a separate discussion.
+**Application distinction:** application heartbeats and subscription acknowledgements are
+ordinary data messages and still refresh this watchdog. Recognizing useful market data
+requires exchange-adapter participation. Deadline scheduling remains separate work;
+graceful shutdown and log-only reporting of the watchdog cause are the agreed policy.
 
 Other interface gaps: no public control-frame event; `ws_data` supplies bytes without
 text/binary metadata; `send()` blocks and reports local write completion.
@@ -257,8 +259,8 @@ operations. Prioritizing a heartbeat between queued messages cannot preempt byte
 written. Do not replay an order automatically after a timeout/reconnect: its outcome may be
 unknown. Reconcile by client/order ID; choose cancel-on-disconnect explicitly in the order adapter.
 
-Report distinct reasons for receive-idle expiry, an optional Pong deadline, heartbeat protocol
-failure, send failure and peer closure. A private-feed lease expiry and an order-acknowledgement
+Report receive-idle expiry in the existing watchdog log. Keep diagnostic distinctions for
+Pong deadlines, heartbeat protocol failures, send failures and peer closure. A private-feed lease expiry and an order-acknowledgement
 timeout belong above the transport. A busy symbol must not hide another subscription's stalled
 data. Use the future [timer/execution abstraction](current_work.md) when available without making
 its implementation a prerequisite for WS-06.

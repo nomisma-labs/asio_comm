@@ -256,8 +256,8 @@ policies are implemented; useful-data idle semantics and connection deadlines re
   Pong replies and current Ping send/completion behavior are preserved. `pong_timeout_sec`
   was initially validation-only; enforcement is complete below.
 - `receive_watchdog` is an optional `receive_data_watchdog`, disabled by default. When enabled,
-  `timeout_sec` must be positive and defaults to 20. Existing sampling,
-  grace, whole-second rounding, and mixed receive-activity classification are preserved.
+  `timeout_sec` must be positive and defaults to 30. Periodic checks exclude control frames,
+  as described below.
 - Session timer objects are optional: `connect()` constructs only the enabled timers,
   waits start after the handshake, and cancellation skips absent timers.
 - Examples and tests use the new parameters. The local TLS fixture covers enabled/disabled
@@ -286,7 +286,6 @@ interval starts after a Pong in `send_done`. A stalled send, missing Pong, write
 and unexpected event order select `failed`, abort the transport, and emit one diagnostic `on_disconnected`.
 Every close/error path cancels active probing. A Pong in `waiting_to_ping` or `sending_ping`
 fails the probe; Pong and timeout events are handled in dispatch order.
-Receive-data watchdog semantics are unchanged.
 Validation: a local TLS peer reproduced an unbounded Ping write by withholding reads until
 the test guard stopped the client. All 22 active / 13 passive scenarios pass in Debug and
 ASan/UBSan; active scenarios also pass in Release, and WebSocket unit tests pass in Debug.
@@ -311,14 +310,26 @@ test suites. No new tests were added for this simplification.
 Relevant code: `on_control()`, `start_receive_watchdog_timer()`, `on_receive_watchdog_timer()`, ping handlers, and
 the resolve/connect/handshake chain.
 
+**Receive watchdog activity — 2026-11-03:** connection establishes the initial baseline;
+only complete data messages refresh it. Control Pings/Pongs no longer count. Local TLS cases
+cover watchdog expiry while passive Ping monitoring and active probing remain healthy.
+Checks now run every `timeout_sec`, without scheduling grace or threshold tolerance, and
+compare the full inactivity duration using `>`. Periodic sampling and graceful shutdown remain.
+
+**Decision — 2026-11-03: retain graceful watchdog shutdown and log diagnostics.** Data
+inactivity permits waiting for the close handshake. The watchdog log records the cause;
+`on_disconnected` retains the existing close-result reason. Propagating a watchdog reason
+through `shutdown()` is not required.
+
 Current behavior confirmed by inspection:
 
 - Idle monitoring is disabled by default. When enabled, a quiet but healthy peer can be disconnected even with outbound pings disabled.
-- Received ping frames count as activity; pongs count only when `active_ping` is present.
+- Control Ping/Pong frames do not count as data activity.
 - Data activity is recorded at complete-message delivery, so a slow fragmented message can
-  be making network progress without refreshing `last_recv_ts_`.
-- With a watchdog enabled at 20 seconds, idle checks run every 30 seconds and compare whole elapsed seconds against
-  24. This is periodic sampling, not an exact 24- or 30-second inactivity deadline.
+  be making network progress without refreshing the watchdog.
+- With the default enabled watchdog, checks run every 30 seconds and request shutdown when
+  data inactivity exceeds 30 seconds. Data receipt does not reschedule a check, so this
+  remains periodic sampling rather than a deadline relative to the last data message.
 - Active probe write/timer errors and missed Pong deadlines disconnect immediately. Probe
   success requires a completed write followed by a control Pong.
 - DNS has no library deadline. TCP connect and TLS share one configured deadline; WebSocket
@@ -332,14 +343,15 @@ stage improves the existing timer rather than replacing it with Beast's idle mec
 Implement and validate the policy explicitly:
 
 - Define the useful-data watchdog separately from the completed active/passive Ping policies.
-- Define exactly what refreshes activity: complete data messages, fragmented-message progress,
-  incoming pings, and incoming pongs. Decide which of these prove the activity the caller needs;
-  receiving control frames alone must not silently imply that market data is arriving.
-- Use steady-clock durations without whole-second truncation. Schedule checks against the
-  selected inactivity deadline instead of deriving periodic sampling and grace from ping cadence.
+- Complete data messages refresh activity; control frames and partial fragments do not.
+  Application heartbeats still arrive as data messages; useful market-data classification
+  requires exchange-adapter participation.
+- Schedule checks against the last data message's inactivity deadline instead of periodic polling.
+  Steady-clock comparisons already preserve full precision and use no grace or tolerance.
 - Use explicit `switch`/`case` mappings for expiry, cancellation, timer errors, and terminal
   cleanup. Queued expiries and obsolete-session completions must not rearm or notify after close
-  or reconnect; an idle failure must produce one terminal outcome with a clear reason.
+  or reconnect. Watchdog shutdown must produce one terminal notification; its cause is
+  recorded in the log, while the event retains the existing close-result reason.
 - Test activity near the deadline, delayed timer delivery, control-only traffic, fragmented
   data, silence, cancellation with an expiry already queued, and reconnect before callbacks drain.
 

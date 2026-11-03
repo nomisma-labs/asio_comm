@@ -13,7 +13,7 @@ export namespace nom
         static constexpr unsigned default_async_operation_timeout_sec = 30;
         static constexpr unsigned default_ping_period_sec = 20;
         static constexpr unsigned default_ping_timeout_sec = 20;
-        static constexpr unsigned default_receive_data_timeout_sec = 20;
+        static constexpr unsigned default_receive_data_timeout_sec = 30;
         static constexpr unsigned default_socket_send_buf_size = 64 * 1024;
         static constexpr unsigned default_socket_recv_buf_size = 64 * 1024;
         static constexpr unsigned default_max_message_size = 16 * 1024 * 1024;
@@ -76,8 +76,9 @@ export namespace nom
         // TCP connect/TLS setup budget, and the separate deadline for each active Ping write.
         unsigned async_operation_timeout_sec{default_async_operation_timeout_sec};
         // Disabled by default. An enabled watchdog is independent of the Ping settings.
-        // Current mixed-activity policy: sample every N + N/2 seconds and close when whole
-        // elapsed seconds exceed N + N/5. Rounding, grace and useful-data semantics await WS-IDLE.
+        // Track complete data messages only; control Ping/Pong frames do not refresh this watchdog.
+        // Check every timeout_sec seconds and close when data inactivity exceeds timeout_sec.
+        // Periodic scheduling and application-level useful-data semantics await WS-IDLE.
         struct receive_data_watchdog
         {
             unsigned timeout_sec{default_receive_data_timeout_sec};
