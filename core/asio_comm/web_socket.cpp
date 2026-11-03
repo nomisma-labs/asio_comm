@@ -89,6 +89,26 @@ namespace nom
             std::string host_header;
         };
 
+        struct active_ping
+        {
+            enum ap_status
+            {
+                init,
+                waiting_to_ping,
+                sending_ping,
+                send_done,
+                failed
+            };
+            explicit active_ping(const net::any_io_executor& executor) : timer(executor)
+            {
+            }
+
+            net::steady_timer timer;
+            ap_status status{init};
+            std::uint64_t sequence{};
+            std::string payload;
+        };
+
         template <ws_status NewStatus> void set_status() noexcept
         {
             static_assert(NewStatus != ws_status::init, "Only construction may select init");
@@ -181,8 +201,8 @@ namespace nom
             }
             try
             {
-                if (active_ping_timer_)
-                    active_ping_timer_->cancel();
+                if (active_ping_)
+                    active_ping_->timer.cancel();
             }
             catch (...)
             {
@@ -221,7 +241,7 @@ namespace nom
                     if (parent_->params_.receive_watchdog)
                         receive_watchdog_timer_.emplace(parent_->io_->executor);
                     if (parent_->params_.active_ping)
-                        active_ping_timer_.emplace(parent_->io_->executor);
+                        active_ping_.emplace(parent_->io_->executor);
                     if (parent_->params_.passive_ping)
                         passive_ping_timer_.emplace(parent_->io_->executor);
                     setup_ = std::make_unique<setup_state>(parent_->io_->executor);
@@ -494,8 +514,8 @@ namespace nom
                 if (ws_status::connected != status_)
                     break;
 
-                if (active_ping_timer_)
-                    start_ping_timer();
+                if (active_ping_)
+                    start_active_ping_timer();
 
                 // The stream owns this callback; pending operations keep the session alive.
                 stream_.control_callback(beast::bind_front_handler(&session::on_control, this));
@@ -517,7 +537,7 @@ namespace nom
             }
         }
 
-        void on_control(websocket::frame_type kind, [[maybe_unused]] std::string_view payload)
+        void on_control(websocket::frame_type kind, std::string_view payload)
         {
             switch (status_)
             {
@@ -537,8 +557,11 @@ namespace nom
                 }
                 case websocket::frame_type::pong:
                 {
-                    if (parent_->params_.active_ping)
+                    if (active_ping_)
+                    {
                         last_recv_ts_ = std::chrono::steady_clock::now();
+                        on_active_pong(payload);
+                    }
                     break;
                 }
                 case websocket::frame_type::close:
@@ -546,6 +569,8 @@ namespace nom
                     LDEBUG("{} Close request received from server", id());
                     if (receive_watchdog_timer_)
                         receive_watchdog_timer_->cancel();
+                    if (active_ping_)
+                        active_ping_->timer.cancel();
                     if (passive_ping_timer_)
                         passive_ping_timer_->cancel();
                     set_status<ws_status::disconnected>();
@@ -583,15 +608,18 @@ namespace nom
             {
             case ws_status::connected:
             {
-                if (net::error::operation_aborted == ec)
+                if (net::error::operation_aborted == ec) //...timer is cancelled
                     break;
 
                 assert(passive_ping_timer_ && parent_->params_.passive_ping);
                 const auto now = std::chrono::steady_clock::now();
-                // A Ping can refresh the deadline after an older successful expiry was already queued.
+                // TODO[WS-TIMER-GENERATION] (stage WS-06): Replace active/passive Ping stale callback checks
+                // with generation-based timers.
+                // After a long suspension, an obsolete callback can see now >= the new expiry.
                 if (!ec && now < passive_ping_timer_->expiry())
                     break;
 
+                // steady_timer normally reports success or operation_aborted; other errors are handled defensively.
                 auto reason = ec ? "Passive Ping timer error: " + ec.message()
                                  : std::format("Passive Ping timeout: no server Ping within {} seconds",
                                                parent_->params_.passive_ping->ping_timeout_sec);
@@ -623,69 +651,214 @@ namespace nom
                 beast::bind_front_handler(&session::on_receive_watchdog_timer, shared_from_this()));
         }
 
-        void start_ping_timer()
+        void start_active_ping_timer()
         {
-            assert(active_ping_timer_ && parent_->params_.active_ping);
-            active_ping_timer_->expires_after(std::chrono::seconds{parent_->params_.active_ping->ping_period_sec});
-            active_ping_timer_->async_wait(beast::bind_front_handler(&session::on_ping_timer, shared_from_this()));
+            assert(active_ping_ && parent_->params_.active_ping);
+            active_ping_->status = active_ping::waiting_to_ping;
+            active_ping_->timer.expires_after(std::chrono::seconds{parent_->params_.active_ping->ping_period_sec});
+            active_ping_->timer.async_wait(
+                beast::bind_front_handler(&session::on_active_ping_timer, shared_from_this()));
         }
 
-        void on_ping_timer(beast::error_code ec)
+        void fail_active_ping(std::string reason)
         {
-            switch (status_)
+            assert(active_ping_);
+            if (active_ping_->status == active_ping::failed)
+                return;
+            assert(ws_status::connected == status_);
+            active_ping_->status = active_ping::failed;
+            const auto now = std::chrono::steady_clock::now();
+            close();
+            LWARN("{} {}", id(), reason);
+            delegate_(*parent_, event::on_disconnected{.ts = now, .reason = std::move(reason)});
+        }
+
+        void on_active_ping_timer(beast::error_code ec)
+        {
+            // Pending operations can outlive the connection and its owner.
+            if (ws_status::connected != status_)
+                return;
+            if (net::error::operation_aborted == ec) //...timer is cancelled
+                return;
+            if (ec)
             {
-            case ws_status::connected:
+                // steady_timer normally reports success or operation_aborted; other errors are handled defensively.
+                fail_active_ping("Active Ping timer error: " + ec.message());
+                return;
+            }
+
+            assert(active_ping_ && parent_->params_.active_ping);
+            switch (active_ping_->status)
             {
-                // on_handshake() starts the first timer; each ping completion rearms it.
-                if (ec)
+            case active_ping::waiting_to_ping:
+                active_ping_->payload = std::to_string(++active_ping_->sequence);
+                active_ping_->status = active_ping::sending_ping;
+                active_ping_->timer.expires_after(std::chrono::seconds{parent_->params_.async_operation_timeout_sec});
+                active_ping_->timer.async_wait(
+                    beast::bind_front_handler(&session::on_active_ping_expire_timer, shared_from_this()));
+                stream_.async_ping(websocket::ping_data{active_ping_->payload.data(), active_ping_->payload.size()},
+                                   beast::bind_front_handler(&session::on_active_ping, shared_from_this()));
+                break;
+            case active_ping::failed:
+                break;
+            case active_ping::init:
+            case active_ping::sending_ping:
+            case active_ping::send_done:
+            default:
+            {
+                auto reason = std::format("Active Ping interval timer: unexpected status {} (expected waiting_to_ping)",
+                                          std::to_underlying(active_ping_->status));
+                LERROR("{} {}", id(), reason);
+                assert(false && "Active Ping interval completion requires waiting_to_ping status");
+                fail_active_ping(std::move(reason));
+                break;
+            }
+            }
+        }
+
+        void on_active_ping_expire_timer(beast::error_code ec)
+        {
+            if (ws_status::connected != status_)
+                return;
+            if (net::error::operation_aborted == ec) //...timer is cancelled
+                return;
+            if (ec)
+            {
+                // steady_timer normally reports success or operation_aborted; other errors are handled defensively.
+                fail_active_ping("Active Ping send timer error: " + ec.message());
+                return;
+            }
+
+            assert(active_ping_ && parent_->params_.active_ping);
+            // See WS-TIMER-GENERATION: a successful write can supersede an already queued expiry.
+            if (std::chrono::steady_clock::now() < active_ping_->timer.expiry())
+                return;
+
+            switch (active_ping_->status)
+            {
+            case active_ping::sending_ping:
+                fail_active_ping(std::format("Active Ping send timeout: write did not complete within {} seconds",
+                                             parent_->params_.async_operation_timeout_sec));
+                break;
+            case active_ping::failed:
+                break;
+            case active_ping::init:
+            case active_ping::waiting_to_ping:
+            case active_ping::send_done:
+            default:
+            {
+                auto reason = std::format("Active Ping send timer: unexpected status {} (expected sending_ping)",
+                                          std::to_underlying(active_ping_->status));
+                LERROR("{} {}", id(), reason);
+                assert(false && "Active Ping send deadline requires sending_ping status");
+                fail_active_ping(std::move(reason));
+                break;
+            }
+            }
+        }
+
+        void on_active_pong_timer(beast::error_code ec)
+        {
+            if (ws_status::connected != status_)
+                return;
+            if (net::error::operation_aborted == ec) //...timer is cancelled
+                return;
+            if (ec)
+            {
+                // steady_timer normally reports success or operation_aborted; other errors are handled defensively.
+                fail_active_ping("Active Pong timer error: " + ec.message());
+                return;
+            }
+
+            assert(active_ping_ && parent_->params_.active_ping);
+            // TODO[WS-TIMER-GENERATION] (stage WS-06): Replace active/passive Ping stale callback checks
+            // with generation-based timers.
+            // After a long suspension, an obsolete callback can see now >= the new expiry.
+            if (std::chrono::steady_clock::now() < active_ping_->timer.expiry())
+                return;
+
+            switch (active_ping_->status)
+            {
+            case active_ping::send_done:
+                fail_active_ping(std::format("Active Pong timeout: no Pong within {} seconds",
+                                             parent_->params_.active_ping->pong_timeout_sec));
+                break;
+            case active_ping::failed:
+                break;
+            case active_ping::init:
+            case active_ping::waiting_to_ping:
+            case active_ping::sending_ping:
+            default:
+            {
+                auto reason = std::format("Active Pong timer: unexpected status {} (expected send_done)",
+                                          std::to_underlying(active_ping_->status));
+                LERROR("{} {}", id(), reason);
+                assert(false && "Active Pong timer completion requires send_done status");
+                fail_active_ping(std::move(reason));
+                break;
+            }
+            }
+        }
+
+        void on_active_ping(beast::error_code ec)
+        {
+            if (ws_status::connected != status_)
+                return;
+            if (net::error::operation_aborted == ec)
+                return;
+            if (ec)
+            {
+                fail_active_ping("Active Ping send error: " + ec.message());
+                return;
+            }
+
+            assert(active_ping_ && parent_->params_.active_ping);
+            switch (active_ping_->status)
+            {
+            case active_ping::sending_ping:
+                LDEBUG("{} sent ping to server", id());
+                active_ping_->status = active_ping::send_done;
+                active_ping_->timer.expires_after(std::chrono::seconds{parent_->params_.active_ping->pong_timeout_sec});
+                active_ping_->timer.async_wait(
+                    beast::bind_front_handler(&session::on_active_pong_timer, shared_from_this()));
+                break;
+            case active_ping::failed:
+                break;
+            case active_ping::init:
+            case active_ping::waiting_to_ping:
+            case active_ping::send_done:
+            default:
+                fail_active_ping(std::format("Active Ping write completed in unexpected status {}",
+                                             std::to_underlying(active_ping_->status)));
+                break;
+            }
+        }
+
+        void on_active_pong(std::string_view payload)
+        {
+            if (ws_status::connected != status_)
+                return;
+            assert(active_ping_ && parent_->params_.active_ping);
+            switch (active_ping_->status)
+            {
+            case active_ping::send_done:
+                if (active_ping_->payload != payload)
                 {
-                    if (net::error::operation_aborted == ec)
-                        break;
-                    LWARN("{} Ping timer error: {}", id(), ec.message());
-                    break;
+                    LWARN("{} Active Pong payload mismatch: expected {:?}, received {:?}",
+                          id(),
+                          active_ping_->payload,
+                          payload);
                 }
-
-                stream_.async_ping({}, beast::bind_front_handler(&session::on_ping, shared_from_this()));
+                start_active_ping_timer();
                 break;
-            }
-            // shutdown() canceled the pending wait; an expiry may already have been queued.
-            case ws_status::disconnecting:
-            // close(), peer close, a read error, or on_shutdown() disconnected the session.
-            // A peer close/read error may leave the ping timer running until it expires.
-            case ws_status::disconnected:
-                if (ec && net::error::operation_aborted != ec)
-                    LWARN("{} Ping timer error: {}", id(), ec.message());
+            case active_ping::failed:
                 break;
+            case active_ping::init:
+            case active_ping::waiting_to_ping:
+            case active_ping::sending_ping:
             default:
-                assert(false && "Ping timer completions require connected, disconnecting, or disconnected state");
-                LERROR("{} Unexpected state: {}", id(), enum_to_string(status_));
-                break;
-            }
-        }
-
-        void on_ping(beast::error_code ec)
-        {
-            switch (status_)
-            {
-            case ws_status::connected:
-                // on_ping_timer() started this send, and no disconnection has started since.
-                if (ec)
-                    LWARN("{} Ping error: {}", id(), ec.message());
-                else
-                    LDEBUG("{} sent ping to server", id());
-
-                // Wait for this send to finish before scheduling another ping.
-                start_ping_timer();
-                break;
-            case ws_status::disconnecting:
-                // shutdown() started closing while this ping completion was pending.
-                break;
-            case ws_status::disconnected:
-                // close(), a peer close, a read error, or on_shutdown() disconnected this session.
-                break;
-            default:
-                assert(false && "Ping completions require connected, disconnecting, or disconnected state");
-                LERROR("{} Unexpected state: {}", id(), enum_to_string(status_));
+                fail_active_ping(std::format("Active Pong received in unexpected status {}",
+                                             std::to_underlying(active_ping_->status)));
                 break;
             }
         }
@@ -777,6 +950,8 @@ namespace nom
                 {
                     if (receive_watchdog_timer_)
                         receive_watchdog_timer_->cancel();
+                    if (active_ping_)
+                        active_ping_->timer.cancel();
                     if (passive_ping_timer_)
                         passive_ping_timer_->cancel();
                     set_status<ws_status::disconnected>();
@@ -851,8 +1026,8 @@ namespace nom
                 set_status<ws_status::disconnecting>();
                 if (receive_watchdog_timer_)
                     receive_watchdog_timer_->cancel();
-                if (active_ping_timer_)
-                    active_ping_timer_->cancel();
+                if (active_ping_)
+                    active_ping_->timer.cancel();
                 if (passive_ping_timer_)
                     passive_ping_timer_->cancel();
 
@@ -906,7 +1081,7 @@ namespace nom
         beast::flat_buffer buffer_;
         network_timestamp last_recv_ts_{};
         std::optional<net::steady_timer> receive_watchdog_timer_;
-        std::optional<net::steady_timer> active_ping_timer_;
+        std::optional<active_ping> active_ping_;
         std::optional<net::steady_timer> passive_ping_timer_;
     };
 

@@ -60,12 +60,13 @@ def run_case(client, context, certificate, case):
                                     time.sleep(0.7)
                                     ping(connection, payload)
                             elif case == 'traffic':
-                                # Keep receive activity alive, including unsolicited Pongs, without server Pings.
+                                # Data and the reply to an active Ping must not refresh the passive deadline.
                                 for _ in range(6):
-                                    connection.sendall(b'\x81\x04data\x8a\x04noop')
+                                    connection.sendall(b'\x81\x04data')
                                     time.sleep(0.25)
-                                assert read_frame(connection) == (0x89, b''), 'active Ping must remain independent'
-                                connection.sendall(b'\x8a\x00')
+                                opcode, payload = read_frame(connection)
+                                assert opcode == 0x89 and payload, 'active Ping must remain independent'
+                                connection.sendall(bytes((0x8a, len(payload))) + payload)
                             elif case == 'peer_close':
                                 connection.sendall(b'\x88\x02\x03\xe8')
                                 assert read_frame(connection)[0] == 0x88

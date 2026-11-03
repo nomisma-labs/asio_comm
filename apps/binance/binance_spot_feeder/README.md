@@ -53,7 +53,7 @@ implementation answers server ping frames while reading; the feeder leaves outbo
 
 Payloads are logged unchanged, including subscription acknowledgements and API errors. The app
 does not use a JSON parser, confirm subscription success, store data separately, or reconstruct
-an order book from depth updates. See the [WebSocket constraints](../../../docs/web_socket.md#usage-constraints-and-deferred-work)
+an order book from depth updates. See the [WebSocket constraints](../../../docs/asio_comm/web_socket.md#usage-constraints-and-deferred-work)
 for the client's current execution and lifetime contract.
 
 ## Assembly structure

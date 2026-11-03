@@ -5,7 +5,7 @@ The broader execution, timer-wrapper, alternate-backend, and simulation design i
 
 This report reviews the [interface](web_socket.cppm), [parameters](ws_params.cppm),
 [implementation](web_socket.cpp), and their TODOs,
-the [component contract](../../docs/web_socket.md), and the existing unit and integration
+the [component contract](../../docs/asio_comm/web_socket.md), and the existing unit and integration
 test sources. It also revisits the issue review in the conversation; no separate issue-report
 file was found in the repository. Findings below come from source inspection and dependency
 documentation. Completed stages below include their build, test, and fault-reproduction evidence.
@@ -96,7 +96,7 @@ Bootstrap's Git setup was blocked by read-only metadata; validation used CMake p
 **Next:** [WS-06](#ws-06) for heartbeats, deadlines, timer cleanup, and peer-close handling.
 WS-03 is closed as unconfirmed; WS-04 and WS-05 are complete below.
 Broader exception guarantees remain in [WS-08](#ws-08). Detailed behavior is in the
-[component contract](../../docs/web_socket.md).
+[component contract](../../docs/asio_comm/web_socket.md).
 
 <a id="ws-03"></a>
 
@@ -157,7 +157,7 @@ Validation requires positive configured durations and positive socket buffers re
 as `int`. WS-06 separates optional idle monitoring from optional Ping policies; absent policies
 are disabled. HTTP names/values and `agent_name` are checked for syntax and supported lengths;
 case-insensitive duplicates and managed handshake/framing overrides are rejected. Explicit
-`User-Agent` overrides remain supported. See the [component contract](../../docs/web_socket.md)
+`User-Agent` overrides remain supported. See the [component contract](../../docs/asio_comm/web_socket.md)
 for exact rules and reserved fields.
 
 Applications, package consumers, and fixtures configure each attempt before connecting.
@@ -236,7 +236,8 @@ continues in WS-06.
 
 **Source TODOs covered:**
 
-- [`WS-PING`](ws_params.cppm) — Enforce active Pong deadlines.
+- **Done:** [`WS-PING`](ws_params.cppm) — Enforce passive Ping and active Pong deadlines.
+- [`WS-TIMER-GENERATION`](web_socket.cpp) — Replace active/passive Ping stale callback checks with generation-based timers.
 - [`WS-IDLE`](ws_params.cppm) — Review the receive watchdog timer and test it properly (perhaps with a local WebSocket server).
 - [`WS-OP-TIMEOUT`](ws_params.cppm) — Review async operation timeouts; reproduce a case when a timeout is triggered.
 - [`WS-CONNECT-DEADLINE`](web_socket.cpp) — Make the connection procedure time-bound (we can use default_async_operation_timeout_sec for it).
@@ -246,14 +247,14 @@ continues in WS-06.
 
 Heartbeat research, exchange requirements, and interface options are in
 [ping_work.md](ping_work.md). It distinguishes transport probes, application heartbeats,
-private-feed leases, and market-data freshness. Parameter migration and passive Ping deadlines
-are implemented; active Pong deadlines and useful-data idle semantics remain pending.
+private-feed leases, and market-data freshness. Parameter migration and both control-Ping
+policies are implemented; useful-data idle semantics and connection deadlines remain pending.
 
 **Preparatory parameter migration — 2026-11-03:**
 
 - `active_ping` replaces the outbound enable flag and supplies `ping_period_sec`; automatic
   Pong replies and current Ping send/completion behavior are preserved. `pong_timeout_sec`
-  is validated but its deadline is not yet enforced.
+  was initially validation-only; enforcement is complete below.
 - `receive_watchdog` is an optional `receive_data_watchdog`, disabled by default. When enabled,
   `timeout_sec` must be positive and defaults to 20. Existing sampling,
   grace, whole-second rounding, and mixed receive-activity classification are preserved.
@@ -270,21 +271,35 @@ Formatting, source headers, Python checks, and `git diff --check` pass.
 `ping_timeout_sec` of handshake completion and another within that interval after each Ping.
 Only control Pings refresh it. Expiry aborts the transport and emits one `on_disconnected`
 with an explicit timeout reason. The deadline is canceled on every close/error path;
-canceled and superseded waits cannot disconnect a refreshed or replaced session.
+canceled waits and completions for replaced sessions are ignored. Superseded expiry callbacks
+check the current deadline; generation-based suppression is deferred below.
 Local TLS tests cover silence, refresh, unrelated data/Pongs, disabled monitoring, delayed
 handshake/handler delivery, terminal cleanup, move, and reconnect from the timeout callback.
 Validation: the `complete` build and all 11 test suites pass, including 13 passive Ping scenarios.
 
-**Lifecycle follow-up from WS-02 (no separate source TODO):** make active Ping cancellation
-consistent across close/error paths; peer close and read errors can leave an active Ping wait
-pending until it expires.
+**Active Ping enforcement — 2026-11-03:** one outstanding probe with a fresh payload;
+every received control Pong becomes a state-machine event, regardless of payload. The
+[handlers](ping_work.md#active-ping-state-machine) dispatch with `switch/case` after
+cancellation/error checks. `async_operation_timeout_sec` bounds the Ping send (`pingExpireT`);
+successful completion replaces that wait with `pong_timeout_sec`. The next `ping_period_sec`
+interval starts after a Pong in `send_done`. A stalled send, missing Pong, write/timer errors,
+and unexpected event order select `failed`, abort the transport, and emit one diagnostic `on_disconnected`.
+Every close/error path cancels active probing. A Pong in `waiting_to_ping` or `sending_ping`
+fails the probe; Pong and timeout events are handled in dispatch order.
+Receive-data watchdog semantics are unchanged.
+Validation: a local TLS peer reproduced an unbounded Ping write by withholding reads until
+the test guard stopped the client. All 22 active / 13 passive scenarios pass in Debug and
+ASan/UBSan; active scenarios also pass in Release, and WebSocket unit tests pass in Debug.
+Coverage includes send expiry, recovery from a blocked write, and a fresh Pong deadline after
+completion. Non-cancellation timer errors and the
+early-Pong failure path are not directly injected. Generation-based timer delivery remains deferred.
 
-**Pending lifecycle step:** reproduce terminal timer cleanup with outbound pings enabled and a
-delegate that leaves the client alive after `on_disconnected`. Check peer close and read errors
-without an application `close()` masking the cleanup. The remaining active Ping timer should
-stop without waiting for its next interval, rearming, or emitting another terminal event.
-Passive deadline cancellation is covered by its local tests; address the active timer before
-enforcing active Pong deadlines.
+**Deferred — `WS-TIMER-GENERATION`:** migrate both Ping timers to the planned
+[generation-based timer wrapper](current_work.md#timer-cancellation). The `now() < expiry()`
+guards check whether the current deadline is due, not which wait produced the callback.
+After a suspension past the rearmed deadline, an obsolete callback can pass through them.
+The wrapper must suppress obsolete generations regardless of delivery delay; current deadline
+enforcement remains separate. Keep the existing implementation until that migration.
 
 **WIP:** application connection deadlines have been removed from all examples, including the
 WebSocket example's overall response timer that also covered connection setup. An overall
@@ -304,8 +319,8 @@ Current behavior confirmed by inspection:
   be making network progress without refreshing `last_recv_ts_`.
 - With a watchdog enabled at 20 seconds, idle checks run every 30 seconds and compare whole elapsed seconds against
   24. This is periodic sampling, not an exact 24- or 30-second inactivity deadline.
-- Ping send failure logs and rearms; a failed ping timer logs and stops. Neither path directly
-  establishes a terminal outcome. A successful ping send does not establish receipt of a pong.
+- Active probe write/timer errors and missed Pong deadlines disconnect immediately. Probe
+  success requires a completed write followed by a control Pong.
 - DNS has no library deadline. TCP connect and TLS share one configured deadline; WebSocket
   handshake/close use the suggested client timeout, 30 seconds in the installed Beast version.
 
@@ -316,8 +331,7 @@ stage improves the existing timer rather than replacing it with Beast's idle mec
 
 Implement and validate the policy explicitly:
 
-- Build on the independent receive watchdog and Ping policies above; add active Pong deadlines
-  without changing passive Ping enforcement or the useful-data contract implicitly.
+- Define the useful-data watchdog separately from the completed active/passive Ping policies.
 - Define exactly what refreshes activity: complete data messages, fragmented-message progress,
   incoming pings, and incoming pongs. Decide which of these prove the activity the caller needs;
   receiving control frames alone must not silently imply that market data is arriving.
@@ -341,8 +355,8 @@ changes a setup/error path and needs focused validation.
 Document automatic replies to peer pings separately from optional outbound pings, and state
 that idle monitoring is independently enabled by `receive_watchdog`. TCP keepalive,
 WebSocket control frames, and exchange JSON/text heartbeats serve different purposes. Keep
-exchange-specific messages in the feeder/protocol layer. Do not add pong matching if the
-actual requirement is merely to observe any peer activity.
+exchange-specific messages in the feeder/protocol layer. Active probing waits for a control Pong;
+useful-data monitoring remains a separate contract.
 
 **Connection-timeout options:** one overall attempt budget covering DNS through WebSocket
 upgrade, or separate stage budgets. Prefer one overall budget initially, with the failing
@@ -435,7 +449,8 @@ Markdown/link and diff review.
 | Source TODO ID | Complete source TODO | Owner stage |
 | --- | --- | --- |
 | [`WS-PARAMS`](ws_params.cppm) | Review parameter contracts and validation. | [WS-04](#ws-04) |
-| [`WS-PING`](ws_params.cppm) | Enforce active Pong deadlines. | [WS-06](#ws-06) |
+| [`WS-PING`](ws_params.cppm) | Enforce passive Ping and active Pong deadlines. | [WS-06](#ws-06); done. |
+| [`WS-TIMER-GENERATION`](web_socket.cpp) | Replace active/passive Ping stale callback checks with generation-based timers. | [WS-06](#ws-06); deferred to the new timers. |
 | [`WS-IDLE`](ws_params.cppm) | Review the receive watchdog timer and test it properly (perhaps with a local WebSocket server). | [WS-06](#ws-06) |
 | [`WS-OP-TIMEOUT`](ws_params.cppm) | Review async operation timeouts; reproduce a case when a timeout is triggered. | [WS-06](#ws-06) |
 | [`WS-LARGE-MESSAGES`](ws_params.cppm) | Test sending and receiving really big messages (e.g. a huge Coinbase initial snapshot); distinguish socket buffers from message limits. | [WS-05](#ws-05) |

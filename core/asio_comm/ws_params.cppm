@@ -47,7 +47,7 @@ export namespace nom
         unsigned max_message_size{default_max_message_size};
 
         // TODO IDs and stage definitions: ws_current_work.md.
-        // TODO[WS-PING] (stage WS-06): Enforce active Pong deadlines.
+        // DONE TODO[WS-PING] (stage WS-06): Enforce passive Ping and active Pong deadlines.
         // TODO[WS-IDLE] (stage WS-06): Review the receive watchdog timer and test it properly
         // (perhaps with a local WebSocket server).
         // TODO[WS-OP-TIMEOUT] (stage WS-06): Review async operation timeouts;
@@ -61,15 +61,19 @@ export namespace nom
 
         struct client_ping_probe
         {
+            // Delay before the first probe and after each completed probe (write followed by a control Pong).
             unsigned ping_period_sec = default_ping_period_sec;
+            // Deadline from successful Ping write completion; async_operation_timeout_sec bounds the write.
+            // Every control Pong is a probe event, regardless of payload. A Pong before write completion fails it.
+            // Expiry closes the transport and reports on_disconnected.
             unsigned pong_timeout_sec = default_ping_timeout_sec;
         };
         // Only server control Pings refresh passive_ping; data and Pongs do not.
-        // Active Pong deadline enforcement is pending WS-PING.
-        // active_ping currently enables periodic Pings and counts received Pongs as activity.
+        // Active probes run one at a time, independently of passive_ping and receive_watchdog.
         std::optional<server_ping_watchdog> passive_ping{std::nullopt};
         std::optional<client_ping_probe> active_ping{std::nullopt};
 
+        // TCP connect/TLS setup budget, and the separate deadline for each active Ping write.
         unsigned async_operation_timeout_sec{default_async_operation_timeout_sec};
         // Disabled by default. An enabled watchdog is independent of the Ping settings.
         // Current mixed-activity policy: sample every N + N/2 seconds and close when whole

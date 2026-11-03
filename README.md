@@ -9,7 +9,7 @@ WebSocket and logging/relay examples.
 
 ## Components
 
-- [WebSocket](docs/web_socket.md): TLS client, state machine, events and usage constraints.
+- [WebSocket](docs/asio_comm/web_socket.md): TLS client, state machine, events and usage constraints.
   The library target is `nom::asio_comm`; its C++ module is `nom.asio_comm`.
 
 ## Example applications

@@ -91,9 +91,8 @@ heartbeats. [Beast timeouts](https://www.boost.org/doc/libs/latest/libs/beast/do
 
 **Current handling — checked 2026-11-03**
 
-The [session implementation](web_socket.cpp) **does explicitly initiate control Pings**:
-`on_handshake()` → `start_ping_timer()` → `on_ping_timer()` → `stream_.async_ping({})`.
-This runs only when `active_ping` is present (default: absent). **Beast sends automatic
+The [session implementation](web_socket.cpp) schedules one control probe at a time with a
+fresh payload when `active_ping` is present (default: absent). **Beast sends automatic
 Pong replies** during reads, regardless of that setting. Beast's own idle timeout and automatic
 keepalive Pings are disabled by the client timeout settings.
 
@@ -101,9 +100,10 @@ These three diagrams start after a successful handshake and an `on_connected` ca
 leaves the session connected. They describe concurrent operations, not additional session
 states. `P` means `active_ping->ping_period_sec` (default when enabled: 20), and `N` means
 `receive_watchdog->timeout_sec` (20 when enabled; the watchdog is absent by default).
-These durations and `passive_ping->ping_timeout_sec` are independent. Enabled timers start
-after the handshake. The passive deadline is measured from handshake completion, then from
-each server control Ping; data and Pongs do not refresh it.
+These durations, `active_ping->pong_timeout_sec` (`T` below), `async_operation_timeout_sec` (`S`), and
+`passive_ping->ping_timeout_sec` are independent. Enabled policies start after the handshake.
+The passive deadline is measured from handshake completion, then from each server control Ping;
+data and Pongs do not refresh it.
 
 **A. Incoming traffic — Beast reads/replies; the session enforces the optional server-Ping deadline**
 
@@ -113,27 +113,36 @@ stateDiagram-v2
     state "Beast: async_read pending" as Reading
     state "Session: disconnected" as Disconnected
     Reading --> Reading : Ping / Beast replies Pong, session refreshes passive deadline if enabled
-    Reading --> Reading : Pong / session records activity only if active_ping is present
+    Reading --> Reading : Pong / if active_ping enabled, dispatch probe event and record activity
     Reading --> Reading : Complete data / session records activity, delivers ws_data, rearms read
     Reading --> Disconnected : peer Close or read error / notify on_disconnected
     Reading --> Disconnected : passive deadline expires / close transport, notify timeout reason
     Disconnected --> [*]
 ```
 
-**B. Outbound Pings — the session schedules; Beast writes**
+**B. Active probing — the session schedules and enforces; Beast writes**
+
+This overview shows scheduling and ownership. The separate [active Ping state machine](#active-ping-state-machine)
+defines the probe statuses and event mapping.
 
 ```mermaid
 stateDiagram-v2
-    [*] --> OutboundPingEnabled
-    state OutboundPingEnabled <<choice>>
-    state "No outbound Ping timer" as PingOff
-    state "Session: wait P seconds" as PingWait
-    state "Beast: async_ping writes empty Ping" as PingWrite
-    OutboundPingEnabled --> PingOff : active_ping is absent
-    OutboundPingEnabled --> PingWait : active_ping is present
-    PingWait --> PingWrite : session.on_ping_timer calls async_ping
-    PingWrite --> PingWait : session.on_ping logs success or error, rearms timer
-    PingWait --> PingOff : timer error / log unless canceled, no rearm
+    [*] --> Enabled
+    state Enabled <<choice>>
+    state "No active probes" as Off
+    state "Session: wait P seconds" as Interval
+    state "Beast: async_ping pending" as Sending
+    state "Session: wait for Pong" as Probe
+    state "Session: disconnected" as Disconnected
+    Enabled --> Off : active_ping absent
+    Enabled --> Interval : active_ping present
+    Interval --> Sending : start S deadline, send fresh payload
+    Sending --> Probe : successful write completion / replace S with T deadline
+    Sending --> Disconnected : send deadline, write/timer error or Pong / abort, notify reason
+    Probe --> Interval : Pong / start P interval
+    Probe --> Disconnected : deadline or timer error / abort transport, notify reason
+    Interval --> Disconnected : timer error or Pong / abort transport, notify reason
+    Disconnected --> [*]
 ```
 
 **C. Receive-activity watchdog — the session checks inactivity and initiates shutdown**
@@ -165,9 +174,14 @@ Across all three paths, explicit `close()` closes the socket, cancels enabled ti
 `disconnected` without a delegate notification. Ping/idle callbacks stop scheduling work
 once the session is disconnecting or disconnected.
 
-- **Active Pong deadline tracking is still missing.** `on_ping()` means the write completed,
-  not that a Pong arrived. Incoming Pong payloads are not matched. A Ping write failure
-  logs and rearms while connected; it does not itself call `shutdown()`.
+- **Active Ping send and Pong deadlines are enforced.** `async_operation_timeout_sec` bounds
+  the Ping write, including waiting behind another control write. Successful completion replaces
+  that deadline with `pong_timeout_sec`. Every control Pong is an event, regardless
+  of payload: `send_done` starts the next interval; `waiting_to_ping` and `sending_ping` fail.
+  Pong and timeout events are handled in dispatch order. Data and server Pings cannot satisfy
+  the probe. Timeout aborts and reports `Active Ping send timeout: write did not complete within N seconds`
+  or `Active Pong timeout: no Pong within N seconds`.
+  Write/timer errors also abort with a reason.
 - **The current idle check is a mixed-activity check.** Complete data messages and server
   Pings refresh `last_recv_ts_`; any Pong does so when `active_ping` is present. This watchdog
   alone cannot detect missing Pings/Pongs while data keeps arriving; `passive_ping` independently
@@ -177,17 +191,17 @@ once the session is disconnecting or disconnected.
   cause, but the disconnection event does not preserve a dedicated idle-timeout reason.
   `receive_watchdog` is absent by default, so no idle timer runs. Enabling a `receive_data_watchdog`
   requires a positive `timeout_sec`; disabling it does not disable outgoing Pings or automatic Pong replies.
-- **Terminal cleanup differs by path.** Peer Close/read errors cancel the receive and passive timers but
-  may leave a pending Ping timer until expiry; its callback then ignores the terminal state.
-  `shutdown()` and explicit `close()` cancel enabled timers.
+- **Terminal cleanup cancels all enabled policies.** Explicit close, peer Close, read errors,
+  and graceful shutdown cancel active/passive Ping and receive-watchdog waits. Late completions
+  cannot rearm a terminal session or emit another terminal event.
 - **Passive Ping deadlines are enforced.** A missed deadline aborts the transport and emits
   one `on_disconnected` with `Passive Ping timeout: no server Ping within N seconds`, without
   waiting for a close handshake. Pings still receive automatic Pongs with monitoring disabled.
-  `active_ping->pong_timeout_sec` is validated but its enforcement remains pending.
   Application heartbeats still reach the application as ordinary `ws_data`.
 
-Source entry points: `on_handshake`, `on_control`, `on_ping_timer`, `on_ping`, `on_receive_watchdog_timer`,
-`on_receive`, `shutdown`, `on_shutdown`, and `close` in [web_socket.cpp](web_socket.cpp).
+Source entry points: `on_handshake`, `on_control`, `on_active_ping_timer`, `on_active_ping_expire_timer`, `on_active_pong_timer`,
+`on_active_ping`, `on_active_pong`, `on_receive_watchdog_timer`, `on_receive`, `shutdown`, `on_shutdown`, and `close`
+in [web_socket.cpp](web_socket.cpp).
 Beast ownership is documented in [control-frame handling](https://www.boost.org/doc/libs/latest/libs/beast/doc/html/beast/using_websocket/control_frames.html)
 and [Ping write completion](https://www.boost.org/doc/libs/latest/libs/beast/doc/html/beast/ref/boost__beast__websocket__stream/async_ping.html).
 
@@ -224,13 +238,15 @@ Recommended responsibility split:
    not require weakening `update_params()`'s prohibition on active-session changes. Extract a
    shared application-heartbeat helper only after concrete adapters establish common needs.
 
-**Control-probe options:** retain periodic probes as the smallest change, or send them only
-after receive silence to reduce traffic. A strict matched-Pong deadline is an additional
-opt-in contract, useful for RTT/bidirectional checks; it is unnecessary when any incoming
-activity satisfies the requirement. If selected, allow one outstanding probe, correlate its
-payload, and distinguish write failure, missing Pong, and unsolicited/wrong-payload Pong.
-Add public control observation/manual Ping only when a consumer needs it; application heartbeat
-support does not require either API. Never disable automatic replies to server control Pings.
+**Selected control-probe policy:** `active_ping` enables periodic control-Ping probes, one
+outstanding at a time. `ping_period_sec` is the delay before the first probe and between a
+completed probe and the next send; `pong_timeout_sec` bounds the wait for a control Pong
+from successful Ping write completion. `async_operation_timeout_sec` separately bounds the
+Ping send from initiation to completion. All three waits reuse one timer.
+The values are independently positive: a timeout longer than the period cannot cause overlapping
+probes. Keep both control policies absent for application-only heartbeat protocols. Public
+control observation/manual Ping remains deferred until a consumer needs it. Automatic replies
+to server control Pings always remain enabled.
 
 **Sending and orders:** a blocking write or long delegate callback can delay reads, automatic
 Pongs, application replies and timers. Meeting bounded response times under a stalled peer may
@@ -249,18 +265,129 @@ its implementation a prerequisite for WS-06.
 
 **5. Suggested implementation order and evidence**
 
-1. **Small lifecycle fix:** reproduce terminal ping/idle timer retention, cancel both on every
-   terminal path, and verify one terminal event with no late rearm after reconnect.
-2. **Transport policy:** decouple idle/probe settings; test control-only traffic, quiet but
-   responsive peers, silence, unsolicited Pongs, slow fragments, queued expiry and delayed
-   callback delivery. Keep Beast idle management disabled.
+1. **Completed control-Ping work:** active/passive deadlines, Pong event dispatch, terminal
+   cancellation, and reconnect safety are covered by local TLS tests.
+2. **Remaining receive-data policy:** define useful activity and test slow fragments and
+   quiet but responsive peers independently of control probes. Keep Beast idle management disabled.
 3. **Application profiles:** local peers for text ping/pong, timestamp/ID echo, server challenges,
    one-way heartbeat, binary/compressed heartbeat and negotiated intervals. Verify healthy
    private silence separately from missing MD. Add text/binary metadata with focused coverage.
 4. **Load and failure boundaries:** subscription bursts, heartbeat behind large/stalled writes,
    rate limits, token renewal and planned server disconnect. Decide whether bounded asynchronous
-   sending or strict Pong correlation is needed from this evidence. Use simulated order replies;
+   sending is needed from this evidence. Use simulated order replies;
    live orders are unnecessary for heartbeat testing.
 
 The broader connection-deadline and network-loss tests remain owned by WS-06. This document
 records research and options; no source TODO is marked complete by creating it.
+
+## Active Ping state machine
+
+Implemented event mapping: `pingT` → `on_active_ping_timer`,
+`pingExpireT` → `on_active_ping_expire_timer`, `ping_sent` → `on_active_ping`,
+`pongT` → `on_active_pong_timer`, and `pong_received` → `on_active_pong`.
+
+One timer serves three successive waits: `pingT` uses `ping_period_sec`, `pingExpireT` uses
+`async_operation_timeout_sec`, and `pongT` uses `pong_timeout_sec`. Arm `pingExpireT` before
+initiating `async_ping`; successful write completion replaces it with a fresh `pongT` wait.
+Thus the send deadline includes time queued behind another control write. Send expiry selects
+`failed` and disconnects with `Active Ping send timeout: write did not complete within N seconds`.
+As with other timers, execution requires the event loop to run.
+
+Every received control Pong becomes `pong_received`, regardless of payload. The current
+state decides its effect: `send_done` starts the next interval; `waiting_to_ping` and
+`sending_ping` fail; `failed` ignores it. Pong and timeout events are handled in dispatch
+order, without a separate receipt-time check in the Pong handler.
+A payload mismatch in `send_done` logs a warning with the expected and received payloads;
+it does not change the transition.
+
+```mermaid
+stateDiagram-v2
+    direction TB
+
+    state "Init" as Init
+    state "waiting_to_ping" as WaitingToPing
+    state "sending_ping" as SendingPing
+    state "send_done" as SendDone
+    state "failed" as Failed
+
+    Init --> WaitingToPing: / arm pingT
+    WaitingToPing --> SendingPing: pingT / arm pingExpireT, send async_ping
+    SendingPing --> SendDone: ping_sent / replace pingExpireT with pongT
+    SendingPing --> Failed: pingExpireT / on_disconnect
+    SendDone --> Failed: pongT / on_disconnect
+    SendDone --> WaitingToPing: pong_received / arm pingT
+
+    classDef waitingStyle fill:#9ACD32
+    classDef pendingStyle fill:#ADD8E6
+    classDef failedStyle fill:#FFB6C1
+    class WaitingToPing waitingStyle
+    class SendingPing,SendDone pendingStyle
+    class Failed failedStyle
+```
+
+**Completion policy:** expected timer and Ping-write completions ignore `operation_aborted`
+without changing the probe status. Other errors select `failed` and call `on_disconnect`.
+For an expected completion, the blank condition after its error rows means success.
+The terminal `failed` state ignores every result, including cancellation and other errors.
+
+The timer events below belong to the current wait. Rows marked impossible assume that
+completions from superseded waits are suppressed before reaching this state machine.
+Rearming cancels the previous wait; `operation_aborted` is ignored before state dispatch.
+Already queued successful expiries currently use an expiry check; reliable suppression after
+long executor suspension remains deferred under `WS-TIMER-GENERATION`.
+
+### `Init`
+
+The automatic transition is `Init` → `waiting_to_ping`, with action `arm pingT`.
+
+| Event | Condition | Next State | Action |
+| --- | --- | --- | --- |
+| auto event |  | `waiting_to_ping` | arm pingT |
+
+### `waiting_to_ping`
+
+| Event | Condition | Next State | Action |
+| --- | --- | --- | --- |
+| `pingT` | `operation_aborted` | `waiting_to_ping` | |
+| `pingT` | Other error | `failed` | `on_disconnect` |
+| `pingT` | | `sending_ping` | Arm `pingExpireT`, then send `async_ping`. |
+| `pingExpireT` | | | impossible: the send wait has not been armed |
+| `ping_sent` | | `failed` | `on_disconnect` |
+| `pongT` | | | impossible as `pingT` and `pongT` share the same timer |
+| `pong_received` | | `failed` | `on_disconnect` |
+
+### `sending_ping`
+
+| Event | Condition | Next State | Action |
+| --- | --- | --- | --- |
+| `pingT` | | | impossible: the ping wait has already completed |
+| `pingExpireT` | `operation_aborted` | `sending_ping` | |
+| `pingExpireT` | Other error | `failed` | `on_disconnect` |
+| `pingExpireT` | | `failed` | `on_disconnect` with a Ping send timeout reason. |
+| `ping_sent` | `operation_aborted` | `sending_ping` | |
+| `ping_sent` | Other error | `failed` | `on_disconnect` |
+| `ping_sent` | | `send_done` | Replace `pingExpireT` with `pongT`. |
+| `pongT` | | | impossible: the pong wait has not been armed yet |
+| `pong_received` | | `failed` | `on_disconnect` |
+
+### `send_done`
+
+| Event | Condition | Next State | Action |
+| --- | --- | --- | --- |
+| `pingT` | | | impossible as `pingT` and `pongT` share the same timer |
+| `pingExpireT` | | | impossible: the send wait was replaced by `pongT` |
+| `ping_sent` | | `failed` | `on_disconnect` |
+| `pongT` | `operation_aborted` | `send_done` | |
+| `pongT` | Other error | `failed` | `on_disconnect` |
+| `pongT` | | `failed` | `on_disconnect` |
+| `pong_received` | | `waiting_to_ping` | Arm `pingT`. |
+
+### `failed`
+
+| Event | Condition | Next State | Action |
+| --- | --- | --- | --- |
+| `pingT` | | `failed` | Ignore. |
+| `pingExpireT` | | `failed` | Ignore. |
+| `ping_sent` | | `failed` | Ignore. |
+| `pongT` | | `failed` | Ignore. |
+| `pong_received` | | `failed` | Ignore. |

@@ -162,6 +162,8 @@ the same observable sequence. It does not mean live networking has deterministic
 Parallelize independent simulation runs first; each owns its clock, state, source identities,
 and random generator.
 
+<a id="timer-cancellation"></a>
+
 **5. Timer cancellation and lifetime**
 
 Prefer a one-shot timer with one active generation. `arm_after()` computes a deadline using
@@ -186,6 +188,13 @@ forwarding to Asio cancellation. Asio can still deliver a successful completion 
 queued when cancellation occurred. Internal canceled completions may drain after the public
 timer is gone, but must not dereference it or its callback owner.
 [Asio timer cancellation](https://www.boost.org/doc/libs/latest/doc/html/boost_asio/reference/basic_waitable_timer/cancel.html).
+
+Concrete migration reason: [`WS-TIMER-GENERATION`](ws_current_work.md#ws-06) marks the active
+and passive Ping handlers' `now() < expiry()` guards. These compare time, not callback identity:
+if dispatch resumes after even the rearmed deadline, an obsolete callback can process the
+current state. Replace these guards when adopting `nom::timer`. Add a contract case that queues
+an old expiry, rearms, then delays dispatch beyond the new deadline: the old generation must
+not reach its consumer, while the current due generation must be delivered once.
 
 Use a Nomisma timer event/result for expiry and unexpected failure, with due/delivery timestamps
 and a small documented error category. Normal cancellation need not become an error event.

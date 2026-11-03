@@ -38,7 +38,7 @@ See the [public API](https://bf-lightning-api.readme.io/docs/endpoint-json-rpc) 
 Every incoming payload is logged unchanged, including acknowledgements and API errors. The app
 does not interpret subscription success, reconstruct an order book, or check sequence numbers.
 Callbacks and client calls run on one `io_context` thread. The synchronous logger consumes each
-borrowed payload during its callback. See the [WebSocket contract](../../../docs/web_socket.md#usage-constraints-and-deferred-work).
+borrowed payload during its callback. See the [WebSocket contract](../../../docs/asio_comm/web_socket.md#usage-constraints-and-deferred-work).
 
 ## Assembly structure
 

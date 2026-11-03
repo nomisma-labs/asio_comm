@@ -151,8 +151,9 @@ def run_move_case(client, context, certificate, mode):
                     with context.wrap_socket(raw, server_side=True) as connection:
                         handshake(connection, port, {"x-move": "source"})
                         assert read_frame(connection) == (0x81, b"moved")
-                        assert read_frame(connection) == (0x89, b""), "missing heartbeat after move"
-                        connection.sendall(b"\x8a\x00\x81\x08accepted")
+                        opcode, payload = read_frame(connection)
+                        assert opcode == 0x89 and payload, "missing heartbeat after move"
+                        connection.sendall(bytes((0x8a, len(payload))) + payload + b"\x81\x08accepted")
                         assert connection.recv(1024) == b"", "moved client did not close"
             except BaseException as error:
                 errors.append(error)
@@ -200,8 +201,9 @@ def run_headers_case(client, context, certificate):
                             if attempt == 2:
                                 # Repeated pings verify that completion rearms the timer.
                                 for _ in range(3):
-                                    assert read_frame(connection) == (0x89, b""), "expected configured outbound ping"
-                                    connection.sendall(b"\x8a\x00")
+                                    opcode, payload = read_frame(connection)
+                                    assert opcode == 0x89 and payload, "expected configured outbound ping"
+                                    connection.sendall(bytes((0x8a, len(payload))) + payload)
                             connection.sendall(b"\x81\x08accepted")
                             assert connection.recv(1024) == b"", "unexpected data after client close"
             except BaseException as error:
@@ -287,10 +289,11 @@ def run_receive_watchdog_case(client, context, certificate, mode):
                                 raise AssertionError(f"disabled timers produced traffic or EOF: {data!r}")
                             connection.settimeout(6)
                         else:
-                            # Ignore Pings: cadence must not set the receive watchdog timeout, and Pong deadlines
-                            # are not enforced in this parameter-only migration.
+                            # Answer probes: their cadence must not set the receive watchdog timeout.
                             for _ in range(3):
-                                assert read_frame(connection) == (0x89, b""), "missing outbound Ping"
+                                opcode, payload = read_frame(connection)
+                                assert opcode == 0x89 and payload, "missing outbound Ping"
+                                connection.sendall(bytes((0x8a, len(payload))) + payload)
                         connection.sendall(b"\x89\x05probe")
                         assert read_frame(connection) == (0x8A, b"probe"), "missing automatic Pong"
                         connection.sendall(b"\x81\x08accepted")

@@ -56,7 +56,7 @@ so received pongs keep the client's idle timer active on quiet subscriptions.
 
 Every payload is logged unchanged, including subscription acknowledgements and API errors.
 The app does not parse messages, reconcile snapshots, reconstruct an order book, or subscribe
-to private data. See the [WebSocket constraints](../../../docs/web_socket.md#usage-constraints-and-deferred-work).
+to private data. See the [WebSocket constraints](../../../docs/asio_comm/web_socket.md#usage-constraints-and-deferred-work).
 
 ## Assembly structure
 
