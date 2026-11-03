@@ -68,10 +68,12 @@ export namespace nom
 
     NOM_ENUM(ws_status, std::uint8_t, init, connecting, connected, disconnecting, conn_failed, disconnected)
 
-    // TODO[WS-CABLE-LOSS] (stage WS-06): Reproduce hard disconnection (unplug the network cable).
-    // TODO[WS-INTERFACE-LOSS] (stage WS-06): Reproduce Docker-based interface disconnection
+    // Detection paths are implemented; live/network-fault reproductions remain pending.
+    // DEV-DONE/LIVE-TEST-PENDING TODO[WS-CABLE-LOSS] (stage WS-06):
+    // Reproduce hard disconnection (unplug the network cable).
+    // DEV-DONE/LIVE-TEST-PENDING TODO[WS-INTERFACE-LOSS] (stage WS-06): Reproduce Docker-based interface disconnection
     // (a soft disconnection of a virtual interface may only be caught by the receive watchdog timer).
-    // TODO[WS-PEER-CLOSE] (stage WS-06): Reproduce normal server disconnection
+    // DEV-DONE/LIVE-TEST-PENDING TODO[WS-PEER-CLOSE] (stage WS-06): Reproduce normal server disconnection
     // (e.g. Binance resets the MD connection once per day).
     // TODO[WS-EXCEPTIONS] (stage WS-08): Consider making the interface noexcept for everything
     // except the constructor.

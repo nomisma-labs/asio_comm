@@ -208,8 +208,8 @@ and [Ping write completion](https://www.boost.org/doc/libs/latest/libs/beast/doc
 
 **Application distinction:** application heartbeats and subscription acknowledgements are
 ordinary data messages and still refresh this watchdog. Recognizing useful market data
-requires exchange-adapter participation. Deadline scheduling remains separate work;
-graceful shutdown and log-only reporting of the watchdog cause are the agreed policy.
+requires exchange-adapter participation. Periodic checks, graceful shutdown, and log-only
+reporting of the watchdog cause are the agreed completed policy; live validation remains pending.
 
 Other interface gaps: no public control-frame event; `ws_data` supplies bytes without
 text/binary metadata; `send()` blocks and reports local write completion.
@@ -218,7 +218,7 @@ Recommended responsibility split:
 
 | Layer | Owns |
 | --- | --- |
-| `web_socket` session | RFC framing/replies, continuous reading, optional control-heartbeat policies, setup/close deadlines, terminal cleanup and diagnostics. Data-idle policy is separate and pending definition. |
+| `web_socket` session | RFC framing/replies, continuous reading, optional control-heartbeat policies and complete-message watchdog, setup/close deadlines, terminal cleanup and diagnostics. |
 | Exchange connection adapter | Application heartbeat encoding/replies, negotiated intervals, authentication, subscription acknowledgement, token renewal and reconnect readiness. |
 | MD/order consumer | Per-channel/symbol freshness, sequence continuity, order-response deadlines and reconciliation of unknown outcomes. |
 
@@ -267,10 +267,11 @@ its implementation a prerequisite for WS-06.
 
 **5. Suggested implementation order and evidence**
 
-1. **Completed control-Ping work:** active/passive deadlines, Pong event dispatch, terminal
-   cancellation, and reconnect safety are covered by local TLS tests.
-2. **Remaining receive-data policy:** define useful activity and test slow fragments and
-   quiet but responsive peers independently of control probes. Keep Beast idle management disabled.
+1. **DEV-DONE/LIVE-TEST-PENDING — control Pings:** active/passive deadlines, Pong event dispatch,
+   terminal cancellation, and reconnect safety are covered by local TLS tests.
+2. **DEV-DONE/LIVE-TEST-PENDING — receive watchdog:** the complete-message, periodic-check policy
+   is implemented, with control-only and actual-data-refresh coverage. Validate live data silence;
+   keep Beast idle management disabled. Useful market-data classification remains adapter work.
 3. **Application profiles:** local peers for text ping/pong, timestamp/ID echo, server challenges,
    one-way heartbeat, binary/compressed heartbeat and negotiated intervals. Verify healthy
    private silence separately from missing MD. Add text/binary metadata with focused coverage.
@@ -279,8 +280,8 @@ its implementation a prerequisite for WS-06.
    sending is needed from this evidence. Use simulated order replies;
    live orders are unnecessary for heartbeat testing.
 
-The broader connection-deadline and network-loss tests remain owned by WS-06. This document
-records research and options; no source TODO is marked complete by creating it.
+Connection-deadline development and live/network-loss validation remain owned by WS-06.
+`WS-TIMER-GENERATION` is **POSTPONED** to the [shared WebSocket/HTTP timer class](current_work.md#timer-cancellation).
 
 ## Active Ping state machine
 
@@ -336,7 +337,7 @@ The timer events below belong to the current wait. Rows marked impossible assume
 completions from superseded waits are suppressed before reaching this state machine.
 Rearming cancels the previous wait; `operation_aborted` is ignored before state dispatch.
 Already queued successful expiries currently use an expiry check; reliable suppression after
-long executor suspension remains deferred under `WS-TIMER-GENERATION`.
+long executor suspension is **POSTPONED** under `WS-TIMER-GENERATION` to the shared WebSocket/HTTP timer class.
 
 ### `Init`
 

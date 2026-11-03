@@ -166,6 +166,11 @@ and random generator.
 
 **5. Timer cancellation and lifetime**
 
+**POSTPONED — shared WebSocket/HTTP timer class:** `WS-TIMER-GENERATION` is tracked here as
+part of the larger `nom::timer` task for both protocols. It does not block completion of the
+current WebSocket Ping and receive-watchdog work. Implement the common timer contract and
+migrate its consumers together; no isolated WebSocket generation workaround is planned.
+
 Prefer a one-shot timer with one active generation. `arm_after()` computes a deadline using
 the engine clock; periodic behavior initially rearms explicitly. A later periodic helper must
 choose fixed-delay or fixed-rate scheduling and a missed-deadline policy.

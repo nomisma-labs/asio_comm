@@ -610,7 +610,7 @@ namespace nom
 
                 assert(passive_ping_timer_ && parent_->params_.passive_ping);
                 const auto now = std::chrono::steady_clock::now();
-                // TODO[WS-TIMER-GENERATION] (stage WS-06): Replace active/passive Ping stale callback checks
+                // POSTPONED TODO[WS-TIMER-GENERATION] (stage WS-06): Replace active/passive Ping stale callback checks
                 // with generation-based timers.
                 // After a long suspension, an obsolete callback can see now >= the new expiry.
                 if (!ec && now < passive_ping_timer_->expiry())
@@ -766,7 +766,7 @@ namespace nom
             }
 
             assert(active_ping_ && parent_->params_.active_ping);
-            // TODO[WS-TIMER-GENERATION] (stage WS-06): Replace active/passive Ping stale callback checks
+            // POSTPONED TODO[WS-TIMER-GENERATION] (stage WS-06): Replace active/passive Ping stale callback checks
             // with generation-based timers.
             // After a long suspension, an obsolete callback can see now >= the new expiry.
             if (std::chrono::steady_clock::now() < active_ping_->timer.expiry())

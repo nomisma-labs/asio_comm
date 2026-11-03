@@ -1,4 +1,4 @@
-**WebSocket review and proposed work — 2026-10-31**
+**WebSocket work status — updated 2026-11-03**
 
 The broader execution, timer-wrapper, alternate-backend, and simulation design is proposed in
 [current_work.md](current_work.md). This document tracks WebSocket-specific cleanup and fixes.
@@ -10,24 +10,32 @@ test sources. It also revisits the issue review in the conversation; no separate
 file was found in the repository. Findings below come from source inspection and dependency
 documentation. Completed stages below include their build, test, and fault-reproduction evidence.
 
-WS-01, WS-02, WS-04, and WS-05 are complete. WS-03 is closed as unconfirmed; WS-06 is next.
-Each stage includes its contract
-documentation and focused tests; building a general failure test framework is not a
-prerequisite for the work.
+WS-01, WS-02, WS-04, and WS-05 are complete. WS-03 is closed as unconfirmed.
+The active/passive Ping and receive-watchdog implementations are **DEV-DONE/LIVE-TEST-PENDING**.
+The agreed watchdog policy is complete; precise rearming on each data message is not a remaining requirement.
 
-| Stage ID | Batch | Complexity | Result |
+| Stage ID | Batch | Complexity | Status |
 | --- | --- | --- | --- |
-| [WS-01](#ws-01) | Mechanical source cleanup and public-export audit | Small | Consistent code and justified public names |
-| [WS-02](#ws-02) | State names, lifetime, and terminal cleanup | Medium–high; split into small steps | Predictable status and ownership transitions |
-| [WS-03](#ws-03) | Send re-entry investigation | Medium (investigation) | Closed — unconfirmed; baseline passes |
-| [WS-04](#ws-04) | Parameter validation and update rules | Medium | Settings with defined values and application times |
-| [WS-05](#ws-05) | Large messages and payload limits | Medium | Complete: verified snapshot handling and bounded message size |
-| [WS-06](#ws-06) | Heartbeats, deadlines, and connection-loss detection | Medium–high | Defined liveness behavior with reproducible tests |
-| [WS-08](#ws-08) | Exception guarantees | Medium–high | Reliable cleanup when operation initiation fails |
-| [WS-09](#ws-09) | Optional ownership and dependency changes | Variable | Changes justified by actual requirements |
+| [WS-01](#ws-01) | Mechanical source cleanup and public-export audit | Small | COMPLETE |
+| [WS-02](#ws-02) | State names, lifetime, and terminal cleanup | Medium–high | COMPLETE |
+| [WS-03](#ws-03) | Send re-entry investigation | Medium | CLOSED — UNCONFIRMED; reopen only with a reproduction |
+| [WS-04](#ws-04) | Parameter validation and update rules | Medium | COMPLETE |
+| [WS-05](#ws-05) | Large messages and payload limits | Medium | COMPLETE |
+| [WS-06](#ws-06) | Heartbeats, deadlines, and connection-loss detection | Medium–high | Ping/watchdog development done; live checks and connection-deadline work remain |
+| [WS-08](#ws-08) | Exception guarantees | Medium–high | OPEN — connected-phase audit and failure tests |
+| [WS-09](#ws-09) | Optional ownership and dependency changes | Variable | OPEN — transport decisions; shared wrappers are separate work |
 
-Stage numbers identify work batches rather than completion order; WS-06 is next.
-Other stage IDs remain unchanged.
+**Status meanings:** `COMPLETE` closes the agreed work. `DEV-DONE/LIVE-TEST-PENDING` means
+implemented behavior is ready for live exchange or controlled network-fault validation; it
+is not a claim that those scenarios have passed. `PARTIAL` still has development or local
+fault-test work. `POSTPONED` moves work outside the current WebSocket pass.
+
+**Remaining development:** connection-attempt deadlines and remaining operation-timeout
+coverage (WS-06), exception guarantees (WS-08), and selected TLS/transport options (WS-09).
+Application-level heartbeats and market-data classification belong to exchange adapters.
+`WS-TIMER-GENERATION` is **POSTPONED** to the new timer class shared by WebSocket and HTTP.
+
+Stage IDs remain stable and identify work batches rather than completion order.
 Source comments use `TODO[WS-…] (stage WS-…)`; each TODO ID identifies one concern and stays
 unchanged if work is reordered. Search the source files for the exact TODO ID. The lists at the start of each stage
 link to its source file. Each TODO has one owning stage, including its documentation,
@@ -36,7 +44,7 @@ work entries; the index below is a navigation aid. Listing a TODO does not mean 
 completed. Findings without a source TODO are identified explicitly.
 
 Complexity describes implementation and validation effort, not severity. Blocking writes
-are a significant issue even though their redesign comes after the requested cleaning work.
+remain an accepted limitation; redesign requires a concrete reproduction or a new requirement.
 Batch 8 builds on the state/lifetime contract from batch 2; exception handling for newly
 changed paths belongs in those changes immediately rather than waiting for the final audit.
 Keep confirmed failures distinct from design choices, and update TODO status/owner references
@@ -93,7 +101,7 @@ unit, TLS loopback, and feeder suites passed. Coverage includes terminal-state b
 queued completions, moves, callback lifetime/reconnect, setup failures, and allocation guards.
 Bootstrap's Git setup was blocked by read-only metadata; validation used CMake presets directly.
 
-**Next:** [WS-06](#ws-06) for heartbeats, deadlines, timer cleanup, and peer-close handling.
+**Remaining:** [WS-06](#ws-06) for live validation and connection deadlines.
 WS-03 is closed as unconfirmed; WS-04 and WS-05 are complete below.
 Broader exception guarantees remain in [WS-08](#ws-08). Detailed behavior is in the
 [component contract](../../docs/asio_comm/web_socket.md).
@@ -227,8 +235,8 @@ Python checks passed. Bootstrap's
 Git setup was blocked by read-only metadata; direct CMake presets were used.
 
 The receive buffer retains capacity; no shrinking policy was added without allocation
-measurements. Blocking writes remain a documented limitation; slow fragmented-message liveness
-continues in WS-06.
+measurements. Blocking writes remain a documented limitation. The receive watchdog described
+in WS-06 tracks complete messages; partial fragments do not refresh it.
 
 <a id="ws-06"></a>
 
@@ -236,157 +244,82 @@ continues in WS-06.
 
 **Source TODOs covered:**
 
-- **Done:** [`WS-PING`](ws_params.cppm) — Enforce passive Ping and active Pong deadlines.
-- [`WS-TIMER-GENERATION`](web_socket.cpp) — Replace active/passive Ping stale callback checks with generation-based timers.
-- [`WS-IDLE`](ws_params.cppm) — Review the receive watchdog timer and test it properly (perhaps with a local WebSocket server).
-- [`WS-OP-TIMEOUT`](ws_params.cppm) — Review async operation timeouts; reproduce a case when a timeout is triggered.
-- [`WS-CONNECT-DEADLINE`](web_socket.cpp) — Make the connection procedure time-bound (we can use default_async_operation_timeout_sec for it).
-- [`WS-CABLE-LOSS`](web_socket.cppm) — Reproduce hard disconnection (unplug the network cable).
-- [`WS-INTERFACE-LOSS`](web_socket.cppm) — Reproduce Docker-based interface disconnection (a soft disconnection of a virtual interface may only be caught by the receive watchdog timer).
-- [`WS-PEER-CLOSE`](web_socket.cppm) — Reproduce normal server disconnection (e.g. Binance resets the MD connection once per day).
+- **DEV-DONE/LIVE-TEST-PENDING:** [`WS-PING`](ws_params.cppm) — Enforce passive Ping and active Pong deadlines.
+- **DEV-DONE/LIVE-TEST-PENDING:** [`WS-IDLE`](ws_params.cppm) — Review the receive watchdog timer and test it properly (perhaps with a local WebSocket server).
+- **DEV-DONE/LIVE-TEST-PENDING:** [`WS-PEER-CLOSE`](web_socket.cppm) — Reproduce normal server disconnection (e.g. Binance resets the MD connection once per day).
+- **DEV-DONE/LIVE-TEST-PENDING:** [`WS-CABLE-LOSS`](web_socket.cppm) — Reproduce hard disconnection (unplug the network cable).
+- **DEV-DONE/LIVE-TEST-PENDING:** [`WS-INTERFACE-LOSS`](web_socket.cppm) — Reproduce Docker-based interface disconnection (a soft disconnection of a virtual interface may only be caught by the receive watchdog timer).
+- **PARTIAL:** [`WS-OP-TIMEOUT`](ws_params.cppm) — Review async operation timeouts; reproduce a case when a timeout is triggered.
+- **OPEN:** [`WS-CONNECT-DEADLINE`](web_socket.cpp) — Make the connection procedure time-bound (we can use default_async_operation_timeout_sec for it).
+- **POSTPONED:** [`WS-TIMER-GENERATION`](web_socket.cpp) — Replace active/passive Ping stale callback checks with generation-based timers.
 
-Heartbeat research, exchange requirements, and interface options are in
-[ping_work.md](ping_work.md). It distinguishes transport probes, application heartbeats,
-private-feed leases, and market-data freshness. Parameter migration and both control-Ping
-policies are implemented; useful-data idle semantics and connection deadlines remain pending.
+For cable/interface loss, development status refers to the existing receive, timeout, and
+terminal-cleanup paths. The physical/Docker fault reproductions have **not** been completed;
+a failure in those checks may identify further implementation work.
 
-**Preparatory parameter migration — 2026-11-03:**
+**Implemented and locally checked**
 
-- `active_ping` replaces the outbound enable flag and supplies `ping_period_sec`; automatic
-  Pong replies and current Ping send/completion behavior are preserved. `pong_timeout_sec`
-  was initially validation-only; enforcement is complete below.
-- `receive_watchdog` is an optional `receive_data_watchdog`, disabled by default. When enabled,
-  `timeout_sec` must be positive and defaults to 30. Periodic checks exclude control frames,
-  as described below.
-- Session timer objects are optional: `connect()` constructs only the enabled timers,
-  waits start after the handshake, and cancellation skips absent timers.
-- Examples and tests use the new parameters. The local TLS fixture covers enabled/disabled
-  idle monitoring, independent Ping cadence, and automatic Pong replies with idle disabled.
+| Area | Agreed behavior |
+| --- | --- |
+| Automatic control replies | Beast replies to server Pings independently of optional monitoring. Its idle timeout and automatic keepalive Pings remain disabled. |
+| Passive Ping | Optional deadline from handshake completion and each server Ping. Only Pings refresh it; expiry aborts the transport and emits one diagnostic `on_disconnected`. |
+| Active Ping | One probe at a time. `pingExpireT` uses `async_operation_timeout_sec` to bound the write; successful completion starts `pong_timeout_sec`. Every control Pong is dispatched by state; a payload mismatch warns. Failures disconnect with a diagnostic. |
+| Receive watchdog | Optional, disabled by default; enabled default is 30 seconds. Connection initializes the baseline, complete data messages refresh it, and control frames/partial fragments do not. Poll every `timeout_sec`; compare the full elapsed duration using strict `>`, without grace or tolerance. |
+| Watchdog shutdown | Log inactivity in milliseconds and call graceful `shutdown()`. Waiting for the close handshake is intentional. The log carries the watchdog cause; `on_disconnected` retains the existing close-result reason. No extra reason propagation is required. |
+| Lifecycle | Enabled timers are canceled on close/error paths; terminal/session guards suppress late work after close, move, or reconnect. Generation-based suppression of superseded waits remains postponed below. |
 
-Validation: GCC `complete` build, 18 WebSocket unit cases, and local TLS loopback checks pass.
-Symbol-provider, resubscription, exchange-feeder/app, and example-workflow checks also pass.
-Formatting, source headers, Python checks, and `git diff --check` pass.
+**WS-IDLE development is complete for this policy.** Periodic polling is accepted; it does not
+promise a deadline exactly relative to the last data message. Application heartbeats and
+subscription acknowledgements are ordinary data messages and still refresh it. Recognizing
+useful market data or per-symbol freshness is separate adapter/consumer work.
 
-**Passive Ping enforcement — 2026-11-03:** `passive_ping` requires the first control Ping within
-`ping_timeout_sec` of handshake completion and another within that interval after each Ping.
-Only control Pings refresh it. Expiry aborts the transport and emits one `on_disconnected`
-with an explicit timeout reason. The deadline is canceled on every close/error path;
-canceled waits and completions for replaced sessions are ignored. Superseded expiry callbacks
-check the current deadline; generation-based suppression is deferred below.
-Local TLS tests cover silence, refresh, unrelated data/Pongs, disabled monitoring, delayed
-handshake/handler delivery, terminal cleanup, move, and reconnect from the timeout callback.
-Validation: the `complete` build and all 11 test suites pass, including 13 passive Ping scenarios.
+**Recorded local evidence (not rerun for this roundup):** WebSocket unit and local TLS loopback
+checks passed during development. Watchdog cases cover disabled/enabled monitoring, actual data
+refresh, and expiry despite healthy server Pings or active Pong replies. The Ping suites cover
+22 active and 13 passive scenarios, including silence, send blockage/recovery, payload/event
+ordering, cleanup, move, and reconnect. Ping checks also passed under ASan/UBSan; active checks
+passed in Release. Later watchdog refinements were checked in Debug; the final millisecond-log
+change was built. Non-cancellation timer errors and the early-Pong failure path are not directly
+injected. These results do not substitute for live or network-blackhole validation.
 
-**Active Ping enforcement — 2026-11-03:** one outstanding probe with a fresh payload;
-every received control Pong becomes a state-machine event, regardless of payload. The
-[handlers](ping_work.md#active-ping-state-machine) dispatch with `switch/case` after
-cancellation/error checks. `async_operation_timeout_sec` bounds the Ping send (`pingExpireT`);
-successful completion replaces that wait with `pong_timeout_sec`. The next `ping_period_sec`
-interval starts after a Pong in `send_done`. A stalled send, missing Pong, write/timer errors,
-and unexpected event order select `failed`, abort the transport, and emit one diagnostic `on_disconnected`.
-Every close/error path cancels active probing. A Pong in `waiting_to_ping` or `sending_ping`
-fails the probe; Pong and timeout events are handled in dispatch order.
-Validation: a local TLS peer reproduced an unbounded Ping write by withholding reads until
-the test guard stopped the client. All 22 active / 13 passive scenarios pass in Debug and
-ASan/UBSan; active scenarios also pass in Release, and WebSocket unit tests pass in Debug.
-Coverage includes send expiry, recovery from a blocked write, and a fresh Pong deadline after
-completion. Non-cancellation timer errors and the
-early-Pong failure path are not directly injected. Generation-based timer delivery remains deferred.
+**DEV-DONE/LIVE-TEST-PENDING checks**
 
-**Deferred — `WS-TIMER-GENERATION`:** migrate both Ping timers to the planned
-[generation-based timer wrapper](current_work.md#timer-cancellation). The `now() < expiry()`
-guards check whether the current deadline is due, not which wait produced the callback.
-After a suspension past the rearmed deadline, an obsolete callback can pass through them.
-The wrapper must suppress obsolete generations regardless of delivery delay; current deadline
-enforcement remains separate. Keep the existing implementation until that migration.
+- Exercise passive/active control policies against selected live exchanges with appropriate
+  parameters: cadence, replies, continued traffic, and longer sessions.
+- Exercise receive-data silence while control traffic remains healthy; check the inactivity
+  log, graceful shutdown, one terminal notification, and caller-managed reconnect.
+- Observe exchange-initiated Close/session rotation and verify cleanup and replacement.
+- Reproduce hard cable loss, interface down/disconnection, and silent packet loss with the
+  relevant watchdogs enabled. EOF/reset tests alone do not establish blackhole detection.
 
-**WIP:** application connection deadlines have been removed from all examples, including the
-WebSocket example's overall response timer that also covered connection setup. An overall
-connection deadline belongs to the client timeout work here. Test-harness deadlines remain
-to bound test execution, and the OKEx application heartbeat remains a protocol requirement.
-The removal passed the GCC `complete` build and the unit, local TLS loopback, and exchange-feeder
-test suites. No new tests were added for this simplification.
+**Remaining development — connection deadlines and operation timeouts**
 
-Relevant code: `on_control()`, `start_receive_watchdog_timer()`, `on_receive_watchdog_timer()`, ping handlers, and
-the resolve/connect/handshake chain.
+`WS-OP-TIMEOUT` is partial: TCP connect and TLS share the configured deadline; WebSocket
+upgrade/close use Beast's client timeout settings. Active Ping send expiry is implemented
+and reproduced locally. DNS has no library deadline, and there is no overall connection-attempt
+budget. Application-level connection deadline workarounds have been removed from the examples;
+test-harness deadlines still bound test execution.
 
-**Receive watchdog activity — 2026-11-03:** connection establishes the initial baseline;
-only complete data messages refresh it. Control Pings/Pongs no longer count. Local TLS cases
-cover watchdog expiry while passive Ping monitoring and active probing remain healthy.
-Checks now run every `timeout_sec`, without scheduling grace or threshold tolerance, and
-compare the full inactivity duration using `>`. Periodic sampling and graceful shutdown remain.
+For `WS-CONNECT-DEADLINE`, choose one overall DNS-through-upgrade budget (recommended first)
+or explicit stage budgets. Implement cancellation/terminal notification and test stalled DNS,
+TCP, TLS, and upgrade paths. Complete local timeout coverage for nonresponsive close peers.
+This work does not reopen the accepted graceful-shutdown policy for data idling.
 
-**Decision — 2026-11-03: retain graceful watchdog shutdown and log diagnostics.** Data
-inactivity permits waiting for the close handshake. The watchdog log records the cause;
-`on_disconnected` retains the existing close-result reason. Propagating a watchdog reason
-through `shutdown()` is not required.
+**Small setup cleanup (no separate TODO):** review the repeated `expires_never()` in
+`on_handshake()` after `on_ssl_handshake()` already disables the TCP deadline. Verify setup
+failure behavior before removing the duplicate call/catch path.
 
-Current behavior confirmed by inspection:
+**POSTPONED — shared timer class, WebSocket and HTTP**
 
-- Idle monitoring is disabled by default. When enabled, a quiet but healthy peer can be disconnected even with outbound pings disabled.
-- Control Ping/Pong frames do not count as data activity.
-- Data activity is recorded at complete-message delivery, so a slow fragmented message can
-  be making network progress without refreshing the watchdog.
-- With the default enabled watchdog, checks run every 30 seconds and request shutdown when
-  data inactivity exceeds 30 seconds. Data receipt does not reschedule a check, so this
-  remains periodic sampling rather than a deadline relative to the last data message.
-- Active probe write/timer errors and missed Pong deadlines disconnect immediately. Probe
-  success requires a completed write followed by a control Pong.
-- DNS has no library deadline. TCP connect and TLS share one configured deadline; WebSocket
-  handshake/close use the suggested client timeout, 30 seconds in the installed Beast version.
+`WS-TIMER-GENERATION` moves to the larger [timer-class task](current_work.md#timer-cancellation).
+The existing `now() < expiry()` guards check time rather than callback identity; an obsolete
+successful completion can pass that check after a long suspension beyond a rearmed deadline.
+The new class must suppress obsolete generations and provide shared arm/rearm/cancel/lifetime
+semantics for both protocols. Keep the current guards until migration. This is not an unfinished
+Ping or receive-watchdog implementation item in this pass.
 
-**Decision — 2026-11-01: retain our own idle timer.** Inactivity detection is a core client
-responsibility whose policy, transitions, and tests must remain explicit in this code.
-Keep Beast's `idle_timeout` disabled (`none()`) and its automatic idle pings disabled. This
-stage improves the existing timer rather than replacing it with Beast's idle mechanism.
-
-Implement and validate the policy explicitly:
-
-- Define the useful-data watchdog separately from the completed active/passive Ping policies.
-- Complete data messages refresh activity; control frames and partial fragments do not.
-  Application heartbeats still arrive as data messages; useful market-data classification
-  requires exchange-adapter participation.
-- Schedule checks against the last data message's inactivity deadline instead of periodic polling.
-  Steady-clock comparisons already preserve full precision and use no grace or tolerance.
-- Use explicit `switch`/`case` mappings for expiry, cancellation, timer errors, and terminal
-  cleanup. Queued expiries and obsolete-session completions must not rearm or notify after close
-  or reconnect. Watchdog shutdown must produce one terminal notification; its cause is
-  recorded in the log, while the event retains the existing close-result reason.
-- Test activity near the deadline, delayed timer delivery, control-only traffic, fragmented
-  data, silence, cancellation with an expiry already queued, and reconnect before callbacks drain.
-
-Beast's WebSocket handshake/close timeout remains separate from our idle policy. Keep TCP
-deadlines disabled after control passes to the WebSocket stream.
-[Beast timeout contract](https://www.boost.org/doc/libs/latest/libs/beast/doc/html/beast/using_websocket/timeouts.html).
-
-**Small source cleanup (no separate source TODO):** review the repeated `expires_never()` in
-`on_handshake()`. `on_ssl_handshake()` already disables the TCP deadline; verify that no path
-re-enables it before removing the duplicate call and its exception-reporting branch. This
-changes a setup/error path and needs focused validation.
-
-Document automatic replies to peer pings separately from optional outbound pings, and state
-that idle monitoring is independently enabled by `receive_watchdog`. TCP keepalive,
-WebSocket control frames, and exchange JSON/text heartbeats serve different purposes. Keep
-exchange-specific messages in the feeder/protocol layer. Active probing waits for a control Pong;
-useful-data monitoring remains a separate contract.
-
-**Connection-timeout options:** one overall attempt budget covering DNS through WebSocket
-upgrade, or separate stage budgets. Prefer one overall budget initially, with the failing
-stage included in diagnostics; add stage controls only when required. A separate attempt
-timer can cancel the active work without trying to reuse the TCP deadline for WebSocket I/O.
-Define a bounded close policy too: detection time plus graceful-close time determines when
-the caller observes final disconnection. If the transport is already failed, consider aborting
-directly rather than trying a normal close handshake.
-Document which paths abort through `close()` and which use graceful `shutdown()`, including
-their notification and cancellation guarantees.
-
-**Completion check:** local tests for idle-but-responsive peer, ignored pings, unsolicited
-pongs, slow fragmented data, stalled TLS/upgrade, EOF, reset, peer close, and a peer that does
-not answer close. Use bounded timing ranges and verify the event reason. Reproduce DNS and TCP
-blackholes with controlled infrastructure or a narrow test seam; an unreachable address alone
-does not reliably reproduce a timeout. Add optional network-namespace/Docker fault tests for
-packet drops and interface loss, and a manual cable-removal recipe. A reset test does not prove
-blackhole detection. Simulate periodic server close locally rather than waiting for an exchange.
+Protocol research and the active-Ping diagram/tables remain in [ping_work.md](ping_work.md);
+the public behavior is documented in the [component contract](../../docs/asio_comm/web_socket.md).
 
 <a id="ws-08"></a>
 
@@ -395,6 +328,8 @@ blackhole detection. Simulate periodic server close locally rather than waiting 
 **Source TODOs covered:**
 
 - [`WS-EXCEPTIONS`](web_socket.cppm) — Consider making the interface noexcept for everything except the constructor.
+
+**OPEN:** agree the exception policy, then complete the connected-phase audit and fault tests.
 
 Relevant code: connection-stage catch blocks, connected-phase operation initiation,
 `update_delegate()`, `connect()`, `send()`, and the broad `noexcept` TODO.
@@ -430,6 +365,8 @@ cardinality, and whether `io_context::run()` propagates under the selected contr
 
 - [`WS-TRANSPORT-OPTIONS`](web_socket.cpp) — Test various connection options (different TLS levels, no SSL?).
 
+**OPEN / optional:** select the supported transport policy and validate it.
+
 These decisions can close TODOs with a documented rationale; implementation is not required
 merely because an alternative exists.
 
@@ -439,13 +376,13 @@ merely because an alternative exists.
 | Different TLS levels / no TLS | Test the intended supported TLS versions against the local server, retaining certificate and hostname verification. Treat plain `ws://` as a separate transport feature requiring a real consumer; it is not achieved by simply accepting another URL scheme. |
 
 Received text/binary type and structured peer close code/reason are additional API decisions
-not covered by the current TODOs. Preserve useful close diagnostics during batch 2; introduce
+not covered by the current TODOs. Preserve existing close diagnostics; introduce
 public fields only when callers need them.
 
 **Coverage and execution notes**
 
 The current test sources cover construction/URL integration, replacement while resolving,
-repeated close/destruction, two allocation-failure cases, TLS echo/push, fragmentation with
+repeated close/destruction, allocation-failure cases, TLS echo/push, fragmentation with
 ping/pong, peer close, partial-frame EOF, certificate/hostname rejection, validated headers and agent
 settings, repeated outbound pings, and a write-error transition to disconnecting. They also
 include source-tree/installed-library consumers. This is an inventory of tests, not a claim
@@ -461,32 +398,29 @@ Markdown/link and diff review.
 | Source TODO ID | Complete source TODO | Owner stage |
 | --- | --- | --- |
 | [`WS-PARAMS`](ws_params.cppm) | Review parameter contracts and validation. | [WS-04](#ws-04) |
-| [`WS-PING`](ws_params.cppm) | Enforce passive Ping and active Pong deadlines. | [WS-06](#ws-06); done. |
-| [`WS-TIMER-GENERATION`](web_socket.cpp) | Replace active/passive Ping stale callback checks with generation-based timers. | [WS-06](#ws-06); deferred to the new timers. |
-| [`WS-IDLE`](ws_params.cppm) | Review the receive watchdog timer and test it properly (perhaps with a local WebSocket server). | [WS-06](#ws-06) |
-| [`WS-OP-TIMEOUT`](ws_params.cppm) | Review async operation timeouts; reproduce a case when a timeout is triggered. | [WS-06](#ws-06) |
+| [`WS-PING`](ws_params.cppm) | Enforce passive Ping and active Pong deadlines. | [WS-06](#ws-06); DEV-DONE/LIVE-TEST-PENDING. |
+| [`WS-TIMER-GENERATION`](web_socket.cpp) | Replace active/passive Ping stale callback checks with generation-based timers. | POSTPONED; [shared WebSocket/HTTP timer class](current_work.md#timer-cancellation). |
+| [`WS-IDLE`](ws_params.cppm) | Review the receive watchdog timer and test it properly (perhaps with a local WebSocket server). | [WS-06](#ws-06); DEV-DONE/LIVE-TEST-PENDING. |
+| [`WS-OP-TIMEOUT`](ws_params.cppm) | Review async operation timeouts; reproduce a case when a timeout is triggered. | [WS-06](#ws-06); PARTIAL. |
 | [`WS-LARGE-MESSAGES`](ws_params.cppm) | Test sending and receiving really big messages (e.g. a huge Coinbase initial snapshot); distinguish socket buffers from message limits. | [WS-05](#ws-05) |
 | [`WS-INIT`](web_socket.cppm) | Introduce init (a session should start in init, not in disconnected). | [WS-02](#ws-02) |
 | [`WS-FAILURE-NAME`](web_socket.cppm) | Rename failed to conn_failed. | [WS-02](#ws-02) |
 | [`WS-TERMINAL-FAILURE`](web_socket.cppm) | Make conn_failed terminal, on the same level as disconnected. | [WS-02](#ws-02) |
 | [`WS-DETACH`](web_socket.cppm) | Any terminal state (disconnected, conn_failed) should also be detached from the parent. | [WS-02](#ws-02); retired — retain the parent link and use terminal status. |
-| [`WS-CABLE-LOSS`](web_socket.cppm) | Reproduce hard disconnection (unplug the network cable). | [WS-06](#ws-06) |
-| [`WS-INTERFACE-LOSS`](web_socket.cppm) | Reproduce Docker-based interface disconnection (a soft disconnection of a virtual interface may only be caught by the receive watchdog timer). | [WS-06](#ws-06) |
-| [`WS-PEER-CLOSE`](web_socket.cppm) | Reproduce normal server disconnection (e.g. Binance resets the MD connection once per day). | [WS-06](#ws-06) |
+| [`WS-CABLE-LOSS`](web_socket.cppm) | Reproduce hard disconnection (unplug the network cable). | [WS-06](#ws-06); DEV-DONE/LIVE-TEST-PENDING; fault reproduction outstanding. |
+| [`WS-INTERFACE-LOSS`](web_socket.cppm) | Reproduce Docker-based interface disconnection (a soft disconnection of a virtual interface may only be caught by the receive watchdog timer). | [WS-06](#ws-06); DEV-DONE/LIVE-TEST-PENDING; fault reproduction outstanding. |
+| [`WS-PEER-CLOSE`](web_socket.cppm) | Reproduce normal server disconnection (e.g. Binance resets the MD connection once per day). | [WS-06](#ws-06); DEV-DONE/LIVE-TEST-PENDING. |
 | [`WS-SEND-REENTRY`](web_socket.cpp) | Try sending from inside the ws_data receiver handler to reproduce re-entry into send. | [WS-03](#ws-03); closed — unconfirmed. |
-| [`WS-EXCEPTIONS`](web_socket.cppm) | Consider making the interface noexcept for everything except the constructor. | [WS-08](#ws-08) |
-| [`WS-CONNECT-DEADLINE`](web_socket.cpp) | Make the connection procedure time-bound (we can use default_async_operation_timeout_sec for it). | [WS-06](#ws-06) |
+| [`WS-EXCEPTIONS`](web_socket.cppm) | Consider making the interface noexcept for everything except the constructor. | [WS-08](#ws-08); OPEN. |
+| [`WS-CONNECT-DEADLINE`](web_socket.cpp) | Make the connection procedure time-bound (we can use default_async_operation_timeout_sec for it). | [WS-06](#ws-06); OPEN. |
 | [`WS-SETUP-STORAGE`](web_socket.cpp) | Dispose of state required only for connection setup after the connection is established (e.g. resolver). | [WS-02](#ws-02) |
-| [`WS-TRANSPORT-OPTIONS`](web_socket.cpp) | Test various connection options (different TLS levels, no SSL?). | [WS-09](#ws-09) |
+| [`WS-TRANSPORT-OPTIONS`](web_socket.cpp) | Test various connection options (different TLS levels, no SSL?). | [WS-09](#ws-09); OPEN / optional. |
 | [`WS-EAGER-SESSION`](web_socket.cpp) | Always create a session so web_socket::send (and others) need not check for a valid session_ pointer. | [WS-02](#ws-02) |
 | [`WS-MOVE-COPY`](web_socket.cpp) | Consider enabling move/copy construction and assignment for web_socket (why are they disabled?). | [WS-02](#ws-02) |
 | [`WS-TLS-OWNERSHIP`](web_socket.cpp) | Review why the TLS context is at the web_socket level (could it move to session?). | [WS-02](#ws-02) |
 
-Batches 1 and 2 are complete, including the direct-header module boundary, state/lifetime
-contracts, moves, TLS ownership, session-owned delegates, and setup-storage disposal.
-`WS-DETACH` is retired in favor of retained parent links. WS-04 parameter validation and
-inactive-only updates are also complete. Continue with message sizes and limits in
-[WS-05](#ws-05); timer cleanup and broader exception guarantees remain in stages 6 and 8.
-Contract checks and TODO maintenance accompany each stage.
-Coordinate the timer/clock redesign in batch 6 with the shared execution proposal in
-[current_work.md](current_work.md).
+**Next work:** choose connection-deadline development (WS-06), the exception audit (WS-08),
+or transport-option decisions (WS-09). Run live Ping/data/connection-loss validation alongside
+those tasks. The shared WebSocket/HTTP timer class is postponed separately; application-level
+heartbeats remain exchange-adapter work. Keep the completed Ping and receive-watchdog scope closed
+unless validation exposes a concrete defect or a new requirement is agreed.

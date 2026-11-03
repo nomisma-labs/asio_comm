@@ -410,9 +410,10 @@ These are outputs of the current machine, shown as actions on edges:
   fragments do not. Application heartbeats still count as data messages; distinguishing useful
   market data requires exchange-adapter participation.
   Idle detection remains owned by this client; Beast's idle timeout and
-  automatic idle pings stay disabled. The activity definition, deadline scheduling, and timer
-  cancellation/error behavior are scheduled for review in
-  [WS-06](../../core/asio_comm/ws_current_work.md#ws-06). DNS has no library deadline; an overall
+  automatic idle pings stay disabled. The periodic watchdog policy is development-complete;
+  live validation remains pending in [WS-06](../../core/asio_comm/ws_current_work.md#ws-06).
+  Generation-based cancellation is postponed to the shared WebSocket/HTTP timer class.
+  DNS has no library deadline; an overall
   connection deadline remains WIP.
 - **Exceptions after connection — deferred.** Read/ping/timer initiation, control-callback
   installation and graceful-close initiation can throw with other operations pending and the
@@ -460,4 +461,5 @@ The existing tests cover:
   delayed callback delivery and event ordering, blocked Ping sends and recovery, disabled probing,
   terminal cancellation during interval and response waits, move, and reconnect.
 
-Broader receive-data policy and the deferred write/exception cases above remain pending.
+Live Ping/data validation, application-specific data classification, and the deferred
+write/exception cases above remain pending. The agreed receive-watchdog implementation is complete.

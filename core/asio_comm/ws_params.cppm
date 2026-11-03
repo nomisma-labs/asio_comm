@@ -47,11 +47,13 @@ export namespace nom
         unsigned max_message_size{default_max_message_size};
 
         // TODO IDs and stage definitions: ws_current_work.md.
-        // DONE TODO[WS-PING] (stage WS-06): Enforce passive Ping and active Pong deadlines.
-        // TODO[WS-IDLE] (stage WS-06): Review the receive watchdog timer and test it properly
-        // (perhaps with a local WebSocket server).
-        // TODO[WS-OP-TIMEOUT] (stage WS-06): Review async operation timeouts;
-        // reproduce a case when a timeout is triggered.
+        // DEV-DONE/LIVE-TEST-PENDING TODO[WS-PING] (stage WS-06):
+        // Enforce passive Ping and active Pong deadlines.
+        // DEV-DONE/LIVE-TEST-PENDING TODO[WS-IDLE] (stage WS-06):
+        // Review the receive watchdog timer and test it properly (perhaps with a local WebSocket server).
+
+        // PARTIAL TODO[WS-OP-TIMEOUT] (stage WS-06):
+        // Review async operation timeouts; reproduce a case when a timeout is triggered.
         struct server_ping_watchdog
         {
             // Deadline from handshake completion or the last server control Ping.
@@ -78,7 +80,7 @@ export namespace nom
         // Disabled by default. An enabled watchdog is independent of the Ping settings.
         // Track complete data messages only; control Ping/Pong frames do not refresh this watchdog.
         // Check every timeout_sec seconds and close when data inactivity exceeds timeout_sec.
-        // Periodic scheduling and application-level useful-data semantics await WS-IDLE.
+        // Periodic checks are intentional; application-level useful-data classification belongs to the caller.
         struct receive_data_watchdog
         {
             unsigned timeout_sec{default_receive_data_timeout_sec};
