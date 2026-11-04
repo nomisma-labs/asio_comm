@@ -18,7 +18,8 @@ import nom.spd_logger;
 
 #if defined(__linux__)
 // Test-executable interposition keeps the real resolver worker busy beyond the deadline.
-// No external DNS or production-code hook is needed; all other names use the system resolver.
+// A long local alias also exercises SNI setup failure after TCP connects.
+// No external DNS or production-code hook is needed.
 extern "C" int getaddrinfo(const char* name, const char* service, const addrinfo* hints, addrinfo** result)
 {
     if (name && std::string_view(name) == "slow-dns.test")
@@ -27,6 +28,8 @@ extern "C" int getaddrinfo(const char* name, const char* service, const addrinfo
         *result = nullptr;
         return EAI_AGAIN;
     }
+    if (name && std::string_view(name).starts_with("long-sni-") && std::string_view(name).size() == 256)
+        name = "localhost";
     using resolver = int (*)(const char*, const char*, const addrinfo*, addrinfo**);
     static const auto resolve = reinterpret_cast<resolver>(dlsym(RTLD_NEXT, "getaddrinfo"));
     return resolve ? resolve(name, service, hints, result) : EAI_FAIL;
@@ -82,6 +85,10 @@ int main(int argc, char** argv)
                 require(++errors == 1, "Duplicate connection failure");
                 if (mode == "reject")
                     require(event.description == "Connect/Handshake error", "Expected rejected upgrade");
+                else if (mode == "tls_error")
+                    require(event.description == "Connect/SSL handshake error", "Expected TLS verification failure");
+                else if (mode == "sni_error")
+                    require(event.description == "Connect/SSL error", "Expected SNI setup failure");
                 else
                 {
                     require(event.description == "Connection timeout", "Expected connection deadline event");
@@ -95,8 +102,16 @@ int main(int argc, char** argv)
                     connection.connect(callbacks);
                 else
                 {
-                    connection.close();
                     limit.cancel();
+                    if (mode == "reject" || mode == "tls_error" || mode == "sni_error")
+                    {
+                        // Keep both the client and callback alive. The peer must observe transport closure
+                        // before acknowledging on stdin; neither close() nor destruction can mask a leak.
+                        std::string acknowledgement;
+                        require(static_cast<bool>(std::getline(std::cin, acknowledgement)) &&
+                                    acknowledgement == "peer_closed",
+                                "Peer must observe closure before the error callback returns");
+                    }
                 }
             }};
         client->connect(callbacks);

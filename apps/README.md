@@ -14,8 +14,10 @@ cmake --preset dev
 cmake --build --preset dev --target binance_spot_feeder binance_spot_symbol_provider
 ```
 
-The tables track the target exchange coverage. App links identify implemented examples; skipped symbol
-providers include the reason and API reference. Unverified hosting cells remain explicit. Existing market subdivisions remain separate.
+The tables track the target exchange coverage. App links identify implemented examples and their
+API references. All providers previously blocked by missing HTTPS support are implemented;
+catalog scope is stated where it differs from the feeder. Unverified hosting cells remain explicit.
+Existing market subdivisions remain separate.
 
 Data-freshness monitoring belongs to each subscriber. Application heartbeats and acknowledgements
 arrive as ordinary WebSocket messages, so only the subscriber can decide which messages refresh
@@ -92,42 +94,58 @@ was performed; measure the actual subscriptions from candidate regions before ch
 
 ## Symbol providers
 
-The implemented providers fetch a complete initial catalog over WebSocket and preserve its JSON
-response envelope on stdout. Acknowledgements and unrelated status messages do not complete the
-request. Basic string checks identify expected catalog fields and API errors; there is no JSON
-parser or normalized symbol model. The examples below are abbreviated snapshots, not current
-trading rules. Binance SBE feeds can use the existing Binance Spot JSON symbol catalog.
+The providers fetch an initial catalog over WebSocket or HTTPS and preserve its JSON response
+envelope on stdout. WebSocket acknowledgements/status messages do not complete a catalog request;
+HTTPS providers require HTTP 200 and the expected success envelope. Basic string checks identify
+expected fields and API errors; there is no JSON parser, normalization or instrument filtering.
+Catalogs may include inactive instruments or other product types; consult each row/app for scope.
+The examples below are abbreviated snapshots, not current trading rules. Binance SBE feeds can
+use the existing Binance Spot JSON symbol catalog.
 
-| Exchange | App | Example symbols | Symbol information example or skip reason |
+| Exchange | App | Example symbols | Symbol information example / catalog scope |
 | --- | --- | --- | --- |
 | Binance Spot | [binance_spot_symbol_provider](binance/binance_spot_symbol_provider/README.md) | `BTCUSDT`, `ETHUSDT`, `SOLUSDT` | `{"symbol":"BTCUSDT","status":"TRADING","baseAsset":"BTC","quoteAsset":"USDT","baseAssetPrecision":8,"quoteAssetPrecision":8,"filters":[{"filterType":"PRICE_FILTER","minPrice":"0.01","maxPrice":"1000000.00","tickSize":"0.01"},{"filterType":"LOT_SIZE","minQty":"0.00001","maxQty":"9000.00000","stepSize":"0.00001"}]}` |
-| Binance USDⓈ-M perpetuals (default: USDT-margined BTCUSDT) | Skipped | | Catalog uses REST `GET /fapi/v1/exchangeInfo`; the WS request API does not expose exchangeInfo. The contract-info stream supplies changes, not a full initial catalog. [REST reference](https://developers.binance.com/en/docs/catalog/core-trading-derivatives-trading-usd-s-m-futures/api/rest-api/market-data). |
+| Binance USDⓈ-M perpetuals (default: USDT-margined BTCUSDT) | [binance_perp_symbol_provider](binance/binance_perp_symbol_provider/README.md) | `BTCUSDT`, `ETHUSDT`, `SOLUSDT` | HTTPS `GET /fapi/v1/exchangeInfo`. Full USDⓈ-M catalog, including dated/inactive contracts; select `contractType=PERPETUAL` downstream. Example: `{"symbol":"BTCUSDT","contractType":"PERPETUAL","baseAsset":"BTC","quoteAsset":"USDT"}` |
 | Coinbase | [coinbase_spot_symbol_provider](coinbase/coinbase_spot_symbol_provider/README.md) | `BTC-USD`, `ETH-USD`, `SOL-USD` | `{"id":"BTC-USD","base_currency":"BTC","quote_currency":"USD","quote_increment":"0.01"}` |
-| Upbit | Skipped | | The documented catalog is HTTP `GET /v1/market/all`; WebSocket requires known codes. [Catalog reference](https://global-docs.upbit.com/reference/list-trading-pairs). |
-| OKX Spot | Skipped | | WebSocket instruments publishes parameter/listing changes; a full initial catalog requires REST `GET /api/v5/public/instruments`. [REST and instrument stream](https://www.okx.com/docs-v5/en/#public-data-rest-api-get-instruments). |
-| Bybit | Skipped | | Instrument discovery uses HTTP `GET /v5/market/instruments-info`; public WS topics require known symbols. [Reference](https://bybit-exchange.github.io/docs/v5/market/instrument). |
-| Bitget | Skipped | | Instrument discovery is documented as REST `GET /api/v3/market/instruments`; the public WS catalog has no initial instrument-list request. [Market API](https://www.bitget.com/docs/catalog/market-market-data/market-instruments). |
-| Gate | Skipped | | Full pair specifications use HTTP `GET /spot/currency_pairs`; WS market subscriptions require known pair names. [REST API](https://www.gate.com/docs/developers/apiv4/en/). |
-| KuCoin | Skipped | | Full symbol specifications use the REST symbol endpoints; the public V2 WS channels deliver market data for supplied symbols. [Get symbol](https://www.kucoin.com/docs-new/rest/spot-trading/market-data/get-symbol). |
-| MEXC | Skipped | | Instrument discovery uses HTTP `GET /api/v3/exchangeInfo`; Protobuf WS channels contain market updates, not the catalog. [Reference](https://mexcdevelop.github.io/apidocs/spot_v3_en/#exchange-information). |
-| HTX | Skipped | | The supported-symbol catalog uses HTTP `GET /v2/settings/common/symbols`; market WS channels require a symbol. [Reference data](https://huobiapi.github.io/docs/spot/v1/en/#get-all-supported-trading-symbol-v2). |
-| Crypto.com | Skipped | | The current API documents `public/get-instruments` under REST; the public market WS methods provide subscriptions and heartbeats. [Catalog](https://exchange-developer.crypto.com/exchange/v1/docs/api/rest-single-page/), [WS methods](https://exchange-developer.crypto.com/exchange/v1/docs/api/websocket-single-page/). |
+| Upbit | [upbit_spot_symbol_provider](upbit/upbit_spot_symbol_provider/README.md) | `SGD-BTC`, `SGD-ETH`, `SGD-SOL` | HTTPS `GET /v1/market/all?is_details=true`. Singapore market codes/names/warnings; not full tick/lot rules. Example: `{"market":"SGD-BTC","english_name":"Bitcoin","market_warning":"NONE"}` |
+| OKX Spot | [okx_spot_symbol_provider](okx/okx_spot_symbol_provider/README.md) | `BTC-USDT`, `ETH-USDT`, `SOL-USDT` | HTTPS `GET /api/v5/public/instruments?instType=SPOT`. Spot instrument specifications and state. Example: `{"instId":"BTC-USDT","instType":"SPOT","baseCcy":"BTC","quoteCcy":"USDT"}` |
+| Bybit | [bybit_spot_symbol_provider](bybit/bybit_spot_symbol_provider/README.md) | `BTCUSDT`, `ETHUSDT`, `SOLUSDT` | HTTPS `GET /v5/market/instruments-info?category=spot`. Spot specifications; no Spot pagination. Example: `{"symbol":"BTCUSDT","baseCoin":"BTC","quoteCoin":"USDT","status":"Trading"}` |
+| Bitget | [bitget_spot_symbol_provider](bitget/bitget_spot_symbol_provider/README.md) | `BTCUSDT`, `ETHUSDT`, `SOLUSDT` | HTTPS `GET /api/v3/market/instruments?category=SPOT`. V3 Spot catalog, including tokenized assets. Example: `{"symbol":"BTCUSDT","category":"SPOT","baseCoin":"BTC","quoteCoin":"USDT"}` |
+| Gate | [gate_spot_symbol_provider](gate/gate_spot_symbol_provider/README.md) | `BTC_USDT`, `ETH_USDT`, `SOL_USDT` | HTTPS `GET /api/v4/spot/currency_pairs`. Pair specifications, precision and trading status. Example: `{"id":"BTC_USDT","base":"BTC","quote":"USDT","trade_status":"tradable"}` |
+| KuCoin | [kucoin_spot_symbol_provider](kucoin/kucoin_spot_symbol_provider/README.md) | `BTC-USDT`, `ETH-USDT`, `SOL-USDT` | HTTPS `GET /api/v2/symbols`. Pair specifications, increments and minimum funds. Example: `{"symbol":"BTC-USDT","baseCurrency":"BTC","quoteCurrency":"USDT","enableTrading":true}` |
+| MEXC | [mexc_spot_symbol_provider](mexc/mexc_spot_symbol_provider/README.md) | `BTCUSDT`, `ETHUSDT`, `SOLUSDT` | HTTPS `GET /api/v3/exchangeInfo`. JSON API catalog for the Protobuf market-data feeder. Example: `{"symbol":"BTCUSDT","baseAsset":"BTC","quoteAsset":"USDT","status":"1"}` |
+| HTX | [htx_spot_symbol_provider](htx/htx_spot_symbol_provider/README.md) | `btcusdt`, `ethusdt`, `solusdt` | HTTPS `GET /v2/settings/common/symbols`. Full snapshot (`full=1`); includes offline entries. Example: `{"sc":"btcusdt","bc":"btc","qc":"usdt","state":"online"}` |
+| Crypto.com | [crypto_com_spot_symbol_provider](crypto_com/crypto_com_spot_symbol_provider/README.md) | `BTC_USDT`, `ETH_USDT`, `SOL_USDT` | HTTPS `GET /exchange/v1/public/get-instruments`. Mixed product catalog; select `inst_type=CCY_PAIR` downstream. Example: `{"symbol":"BTC_USDT","inst_type":"CCY_PAIR","base_ccy":"BTC","quote_ccy":"USDT"}` |
 | Kraken | [kraken_spot_symbol_provider](kraken/kraken_spot_symbol_provider/README.md) | `BTC/USD`, `ETH/USD`, `SOL/USD` | `{"symbol":"BTC/USD","base":"BTC","quote":"USD","price_increment":0.1,"qty_increment":1e-08}` |
-| LBank | Skipped | | Pair specifications use HTTP `GET /v2/accuracy.do` (names: `/v2/currencyPairs.do`); no WS catalog request is documented. [Reference](https://www.lbank.com/docs/index.html#trading-pairs). |
-| XT.com | Skipped | | Pair metadata uses HTTP `/v4/public/symbol`; public WS topics require known symbols. [Market API](https://doc.xt.com/docs/spot/Market/GetSymbolInformation). |
-| bitFlyer Spot (Japan) | Skipped | | Discovery uses HTTP `GET /v1/markets`; the Realtime JSON-RPC API subscribes to known product codes. No complete instrument catalog over WS is documented. [API reference](https://lightning.bitflyer.com/docs). |
+| LBank | [lbank_spot_symbol_provider](lbank/lbank_spot_symbol_provider/README.md) | `btc_usdt`, `eth_usdt`, `sol_usdt` | HTTPS `GET /v2/accuracy.do`. Pair specifications and precision, not just names. Example: `{"symbol":"btc_usdt","priceAccuracy":"2","quantityAccuracy":"5"}` |
+| XT.com | [xt_spot_symbol_provider](xt/xt_spot_symbol_provider/README.md) | `btc_usdt`, `eth_usdt`, `sol_usdt` | HTTPS `GET /v4/public/symbol`. Full symbol list with filters; no cached-version suppression. Example: `{"symbol":"btc_usdt","state":"ONLINE","baseCurrency":"btc","quoteCurrency":"usdt"}` |
+| bitFlyer Spot (Japan) | [bitflyer_spot_symbol_provider](bitflyer/bitflyer_spot_symbol_provider/README.md) | `BTC_JPY`, `ETH_JPY`, `XRP_JPY` | HTTPS `GET /v1/markets`. Japan market codes/types; includes FX/CFD. Select `market_type=Spot`; tick/lot rules are not supplied. Example: `{"product_code":"BTC_JPY","market_type":"Spot"}` |
 | Deribit perpetuals (default: inverse BTC-PERPETUAL) | [deribit_perp_symbol_provider](deribit/deribit_perp_symbol_provider/README.md) | `BTC-PERPETUAL`, `ETH-PERPETUAL`, `BTC_USDC-PERPETUAL` | `{"instrument_name":"BTC-PERPETUAL","base_currency":"BTC","quote_currency":"USD","settlement_period":"perpetual"}` |
 | Hyperliquid Spot | [hyperliquid_spot_symbol_provider](hyperliquid/hyperliquid_spot_symbol_provider/README.md) | `PURR/USDC`, `@1`, `@2` | `{"name":"PURR/USDC","tokens":[1,0],"index":0}` |
 | Hyperliquid perpetuals | [hyperliquid_perp_symbol_provider](hyperliquid/hyperliquid_perp_symbol_provider/README.md) | `BTC`, `ETH`, `SOL` | `{"name":"BTC","szDecimals":5,"maxLeverage":40}` |
 
 ### Implementation and validation
 
-All 15 previously missing feeders and five additional symbol providers now have build targets and
-individual READMEs. Each app keeps defaults, argument parsing and `app_config::validate()` in its own `config.h`.
+On **2026-11-05**, the 13 HTTPS-backed symbol providers were implemented with `nom::https`,
+then each fetched its production catalog successfully over **HTTP/1.1**. None remains skipped
+for lack of HTTPS or a requirement for HTTP/2. These were single public requests without credentials;
+regional access rules and future endpoint changes can still affect deployment.
+
+Each HTTPS provider sends one GET, requests uncompressed JSON, and closes after relaying the
+catalog. The default **16 MiB** body limit is explicit to these snapshot apps and configurable with
+`--max-response-size`; shared HTTPS defaults are unchanged. There is no polling, retry, redirect
+following or shared rate limiter. Per-app notes explain request options, quotas and catalog scope.
+The `asio_comm_https_symbol_providers` local TLS suite covers all 13 apps: exact requests,
+chunked/large responses, unchanged stdout JSON, API/HTTP errors, unexpected/compressed replies,
+body limits, disconnects and signal cancellation; HTX incremental responses are rejected.
+The suite passed in Debug and ASan/UBSan builds on the same date.
+
+All listed feeders and symbol providers have build targets and individual READMEs. Each app keeps
+defaults, argument parsing and `app_config::validate()` in its own `config.h`.
 Validation returns `std::expected<void, std::string>` without modifying the configuration. The exchange
 client, output node, and assembly/relay wiring remain in `main.cpp`. Connection callbacks,
-subscriptions and any heartbeat timers are directly visible in that client node. HTX additionally
-links zlib. These examples do not execute orders.
+subscriptions and any heartbeat timers are directly visible in that client node. The HTX feeder
+additionally links zlib. These examples do not execute orders.
 
 On **2026-11-02**, the five new symbol providers fetched production catalogs successfully. All 14
 new feeders that require no credentials received production data during short subscriptions.

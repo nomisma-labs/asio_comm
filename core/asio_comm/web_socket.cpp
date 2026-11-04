@@ -237,7 +237,7 @@ namespace nom
                 }
                 catch (...)
                 {
-                    set_status<ws_status::conn_failed>();
+                    close();
                     throw;
                 }
                 break;
@@ -291,7 +291,7 @@ namespace nom
                 // connect() entered connecting and started DNS resolution.
                 if (ec)
                 {
-                    set_status<ws_status::conn_failed>();
+                    close();
                     LERROR("{} Resolve error: {}", id(), ec.message());
                     notify_error("Resolve error", ec.message());
                     break;
@@ -304,12 +304,12 @@ namespace nom
                 }
                 catch (const std::exception& error)
                 {
-                    set_status<ws_status::conn_failed>();
+                    close();
                     notify_error("TCP connect setup error", error.what());
                 }
                 catch (...)
                 {
-                    set_status<ws_status::conn_failed>();
+                    close();
                     notify_error("TCP connect setup error", "Unknown exception");
                 }
 
@@ -341,7 +341,7 @@ namespace nom
                 // on_resolve() started TCP connect while the connection attempt remained active.
                 if (ec)
                 {
-                    set_status<ws_status::conn_failed>();
+                    close();
                     LERROR("{} Connect error: {}", id(), ec.message());
                     notify_error("Connect error", ec.message());
                     break;
@@ -349,8 +349,8 @@ namespace nom
 
                 if (!SSL_set_tlsext_host_name(stream_.next_layer().native_handle(), parent_->url_.host().c_str()))
                 {
-                    set_status<ws_status::conn_failed>();
                     ec = beast::error_code(static_cast<int>(::ERR_get_error()), net::error::get_ssl_category());
+                    close();
                     LERROR("{} Connect error: {}", id(), ec.message());
                     notify_error("Connect/SSL error", ec.message());
                     break;
@@ -371,12 +371,12 @@ namespace nom
                 }
                 catch (const std::exception& error)
                 {
-                    set_status<ws_status::conn_failed>();
+                    close();
                     notify_error("TLS handshake setup error", error.what());
                 }
                 catch (...)
                 {
-                    set_status<ws_status::conn_failed>();
+                    close();
                     notify_error("TLS handshake setup error", "Unknown exception");
                 }
                 break;
@@ -407,7 +407,7 @@ namespace nom
                 // on_connect() completed TCP/SNI setup and started the TLS handshake.
                 if (ec)
                 {
-                    set_status<ws_status::conn_failed>();
+                    close();
                     LERROR("{} Connect/SSL handshake error: {}", id(), ec.message());
                     notify_error("Connect/SSL handshake error", ec.message());
                     break;
@@ -435,12 +435,12 @@ namespace nom
                 }
                 catch (const std::exception& error)
                 {
-                    set_status<ws_status::conn_failed>();
+                    close();
                     notify_error("WebSocket handshake setup error", error.what());
                 }
                 catch (...)
                 {
-                    set_status<ws_status::conn_failed>();
+                    close();
                     notify_error("WebSocket handshake setup error", "Unknown exception");
                 }
                 break;
@@ -496,7 +496,7 @@ namespace nom
                 // on_ssl_handshake() completed TLS setup and started the WebSocket handshake.
                 if (ec)
                 {
-                    set_status<ws_status::conn_failed>();
+                    close();
                     LERROR("{} Connect/Handshake error: {}", id(), ec.message());
                     notify_error("Connect/Handshake error", ec.message());
                     break;
@@ -508,13 +508,13 @@ namespace nom
                 }
                 catch (const std::exception& error)
                 {
-                    set_status<ws_status::conn_failed>();
+                    close();
                     notify_error("WebSocket handshake completion error", error.what());
                     break;
                 }
                 catch (...)
                 {
-                    set_status<ws_status::conn_failed>();
+                    close();
                     notify_error("WebSocket handshake completion error", "Unknown exception");
                     break;
                 }

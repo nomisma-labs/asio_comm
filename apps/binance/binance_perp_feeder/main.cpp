@@ -10,6 +10,9 @@
 
 #include <boost/asio/any_io_executor.hpp>
 #include <boost/asio/io_context.hpp>
+#include <boost/asio/signal_set.hpp>
+#include <boost/system/error_code.hpp>
+#include <csignal>
 
 import std;
 import nom.asio_comm;
@@ -24,6 +27,12 @@ namespace nom::event
     {
         start,
         stop
+    };
+
+    enum class feed_event
+    {
+        connected,
+        failed
     };
 
     // Borrowed views are consumed synchronously by the relay before the WebSocket callback returns.
@@ -119,11 +128,15 @@ public:
         // Workflow: connect -> SUBSCRIBE -> {"result":null,"id":1} or error -> continuous events.
         // send() is local write completion; this example logs the ack without establishing readiness.
         LINFO("Connected: {}", connection.session_id());
+        nom::relay<Traits>::pass_response(this, nom::event::feed_event::connected);
+        // A response handler may close the connection before subscription.
+        if (!connection.is_connected())
+            return;
         LINFO("Subscribing: {}", request_);
         if (!connection.send(request_))
         {
             LERROR("Subscription send failed");
-            on_request(nom::event::service_command::stop);
+            nom::relay<Traits>::pass_response(this, nom::event::feed_event::failed);
         }
     }
 
@@ -147,13 +160,13 @@ public:
         // The documented 24 h rotation also reaches here. A continuous service must reconnect,
         // resubscribe and restore snapshots; this example stops so an interrupted capture is visible.
         LWARN("Disconnected: {}", event.reason);
-        on_request(nom::event::service_command::stop);
+        nom::relay<Traits>::pass_response(this, nom::event::feed_event::failed);
     }
 
     void operator()(nom::web_socket&, const nom::event::network_error& event)
     {
         LERROR("{}: {}", event.description, event.message);
-        on_request(nom::event::service_command::stop);
+        nom::relay<Traits>::pass_response(this, nom::event::feed_event::failed);
     }
 
 private:
@@ -161,8 +174,89 @@ private:
     nom::web_socket client_;
 };
 
+template <typename Traits> class app_terminator
+{
+public:
+    struct context_mixin
+    {
+        // Unset while running; the first stop fixes the process result.
+        std::optional<int> exit_code;
+    };
+
+    explicit app_terminator(const app_config& config)
+        : signals_(nom::ctx(this).io, SIGINT, SIGTERM), exit_after_sec_(config.exit_after_sec)
+    {
+    }
+
+    void on_request(nom::event::service_command command)
+    {
+        switch (command)
+        {
+        case nom::event::service_command::start:
+            signals_.async_wait(
+                [this](const boost::system::error_code& error, int signal_number)
+                {
+                    if (!error && !nom::ctx(this).exit_code)
+                    {
+                        LINFO("Stopping on signal {}", signal_number);
+                        stop(0);
+                    }
+                });
+            nom::relay<Traits>::pass_request(this, command);
+            break;
+        case nom::event::service_command::stop:
+            stop(0);
+            break;
+        }
+    }
+
+    void on_response(nom::event::feed_event event)
+    {
+        switch (event)
+        {
+        case nom::event::feed_event::connected:
+            if (!exit_after_sec_)
+                break;
+            if (*exit_after_sec_ == 0)
+            {
+                LINFO("Stopping after connection (--exit-after-sec 0)");
+                stop(0);
+                break;
+            }
+            exit_timer_.emplace(nom::ctx(this).io.get_executor());
+            exit_timer_->arm_after(std::chrono::seconds{*exit_after_sec_},
+                                   [this]
+                                   {
+                                       LINFO("Stopping after {} seconds connected", *exit_after_sec_);
+                                       stop(0);
+                                   });
+            break;
+        case nom::event::feed_event::failed:
+            stop(1);
+            break;
+        }
+    }
+
+private:
+    void stop(int exit_code)
+    {
+        // The first stop fixes the result, even if another signal or failure is already queued.
+        if (nom::ctx(this).exit_code)
+            return;
+        nom::ctx(this).exit_code = exit_code;
+        if (exit_timer_)
+            exit_timer_->cancel();
+        signals_.cancel();
+        nom::relay<Traits>::pass_request(this, nom::event::service_command::stop);
+    }
+
+    boost::asio::signal_set signals_;
+    std::optional<unsigned> exit_after_sec_;
+    std::optional<nom::timer> exit_timer_;
+};
+
 struct binance_perp_assembly
-    : nom::assembly<binance_perp_assembly, asio_service, market_data_logger, binance_perp_client>
+    : nom::assembly<binance_perp_assembly, asio_service, app_terminator, market_data_logger, binance_perp_client>
 {
 };
 
@@ -172,11 +266,12 @@ struct app : nom::relay<binance_perp_assembly>
     {
     }
 
-    void start()
+    int start()
     {
         request(nom::event::service_command::start);
-        // Relay calls and all WebSocket callbacks stay on this one io_context thread.
+        // Drain canceled handlers before destroying the nodes; do not stop the context early.
         ctx().io.run();
+        return ctx().exit_code.value_or(1);
     }
 };
 
@@ -187,7 +282,10 @@ int main(int argc, char** argv)
         std::cout << "Usage: binance_perp_feeder [--symbols BTCUSDT,ETHUSDT]\n"
                      "                           [--channels bookTicker,trade,depth@100ms] [--endpoint "
                      "wss://HOST/public/ws]\n"
+                     "                           [--exit-after-sec SECONDS]\n"
                      "Defaults: BTCUSDT, all three channels, wss://fstream.binance.com/public/ws.\n"
+                     "No time limit by default; 0 exits after connection, before subscribing.\n"
+                     "Positive limits count seconds after connection.\n"
                      "Log all incoming messages until disconnected or stopped with Ctrl+C.\n";
         return 0;
     }
@@ -201,9 +299,9 @@ int main(int argc, char** argv)
             return 1;
         }
         nom::init_logger(nom::main_logger, config.log);
-        app(config).start();
+        const auto result = app(config).start();
         nom::flush_logger(nom::main_logger);
-        return 1; // An ended connection interrupts this continuous feed.
+        return result;
     }
     catch (const std::exception& error)
     {

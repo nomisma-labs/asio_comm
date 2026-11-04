@@ -65,6 +65,15 @@ if(nom_build_tests AND TARGET binance_spot_resubscribe_test)
     set_tests_properties(${PROJECT_NAME}_binance_spot_resubscribe PROPERTIES LABELS integration TIMEOUT 30)
 endif()
 
+if(nom_build_tests AND TARGET binance_perp_feeder)
+    find_package(Python 3.10 REQUIRED COMPONENTS Interpreter)
+    find_program(openssl_executable openssl REQUIRED)
+    add_test(NAME ${PROJECT_NAME}_binance_perp_exit
+        COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/web_socket/binance_perp_exit_test.py
+            --client $<TARGET_FILE:binance_perp_feeder> --openssl ${openssl_executable})
+    set_tests_properties(${PROJECT_NAME}_binance_perp_exit PROPERTIES LABELS integration TIMEOUT 30)
+endif()
+
 if(nom_build_tests AND TARGET binance_spot_symbol_provider AND TARGET asio_comm_large_messages_client)
     find_package(Python 3.10 REQUIRED COMPONENTS Interpreter)
     find_program(openssl_executable openssl REQUIRED)
@@ -160,4 +169,35 @@ if(nom_build_tests AND TARGET https_example)
             --move-client $<TARGET_FILE:asio_comm_https_move_client>
             --openssl ${openssl_executable})
     set_tests_properties(${PROJECT_NAME}_https_loopback PROPERTIES LABELS integration TIMEOUT 60)
+endif()
+
+if(nom_build_tests)
+    set(https_symbol_provider_args)
+    foreach(app_target IN ITEMS
+        binance_perp_symbol_provider
+        upbit_spot_symbol_provider
+        okx_spot_symbol_provider
+        bybit_spot_symbol_provider
+        bitget_spot_symbol_provider
+        gate_spot_symbol_provider
+        kucoin_spot_symbol_provider
+        mexc_spot_symbol_provider
+        htx_spot_symbol_provider
+        crypto_com_spot_symbol_provider
+        lbank_spot_symbol_provider
+        xt_spot_symbol_provider
+        bitflyer_spot_symbol_provider
+    )
+        if(TARGET ${app_target})
+            list(APPEND https_symbol_provider_args --client $<TARGET_FILE:${app_target}>)
+        endif()
+    endforeach()
+    if(https_symbol_provider_args)
+        find_package(Python 3.10 REQUIRED COMPONENTS Interpreter)
+        find_program(openssl_executable openssl REQUIRED)
+        add_test(NAME ${PROJECT_NAME}_https_symbol_providers
+            COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/https/symbol_providers_test.py
+                --openssl ${openssl_executable} ${https_symbol_provider_args})
+        set_tests_properties(${PROJECT_NAME}_https_symbol_providers PROPERTIES LABELS integration TIMEOUT 90)
+    endif()
 endif()

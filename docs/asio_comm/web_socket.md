@@ -55,9 +55,9 @@ stateDiagram-v2
     state "conn_failed" as ConnFailed
 
     WsHandshaking --> Connected: WsHandshakeDone<br/>/ cancel connection deadline, on_connected, start I/O if still connected
-    Connecting --> ConnFailed: ConnectError, ConnectSetupException / emit network_error
+    Connecting --> ConnFailed: ConnectError, ConnectSetupException<br/>/ close transport, emit network_error
     Connecting --> ConnFailed: ConnectionDeadline<br/>/ close transport, emit network_error
-    Resolving --> ConnFailed: ConnectStartException / rethrow
+    Resolving --> ConnFailed: ConnectStartException / close transport, rethrow
 
     Connected --> Connected: ReadDone [ok]<br/>/ ws_data, next read unless disconnected
     Connected --> Disconnecting: shutdown [write failure]<br/>/ cancel timers, async_close
@@ -165,8 +165,8 @@ with success if already queued.
   constructs the enabled timers, allocates setup storage, arms the connection deadline, and starts DNS resolution; other
   states log an error and do nothing. Terminal sessions are never reused. If timer construction,
   setup allocation or DNS initiation throws, the session
-  becomes `conn_failed` and the original exception propagates to the caller; no delegate event
-  is emitted. If replacing the delegate
+  becomes `conn_failed` and closes the transport before the original exception propagates to the caller;
+  no delegate event is emitted. If replacing the delegate
   or allocating the next session throws, the existing session remains installed with its
   current status. Construction of the wrapper itself now includes allocation and construction
   of the first session and TLS/WebSocket stream. Optional timer objects are constructed by `connect()`.
@@ -245,19 +245,20 @@ These handlers dispatch through `switch (status_)`: connecting handles the curre
 `conn_failed` ignores its completion, and all other states assert, or log and return when
 assertions are disabled. `connect()` sets connecting before starting DNS resolution; each
 successful stage starts the next operation without changing that status. Connection stages
-run sequentially, with only one stage pending at a time. A connection error sets `conn_failed`
-and ends the chain. Cancellation through `close()`, reconnect, or owner destruction also sets
+run sequentially, with only one stage pending at a time. A connection error sets `conn_failed`,
+closes the transport and ends the chain before notifying the application. Cancellation through
+`close()`, reconnect, or owner destruction also sets
 `conn_failed` before cancelling setup operations, so queued completions stop without checking
 `parent_`. This includes successful completions already queued when cancellation occurs.
 The synchronous socket setup and handshake request decorator assert connecting.
 Setup and operation-initiation exceptions inside these completion handlers select `conn_failed`
-in the catch body. A local notification lambda invokes the session's delegate and emits
-`network_error` directly from the catch. The event identifies the failed stage and carries
+and close the transport in the catch body. A local notification lambda invokes the session's delegate
+and emits `network_error` directly from the catch. The event identifies the failed stage and carries
 `std::exception::what()`, or `Unknown exception` for other exception types. The original setup
 exception is suppressed. Message copying and notification happen after the status change; exceptions
 from a catch body propagate instead of being caught by another handler of the same try block.
 Ordinary completion errors use the same notification lambda. The wrapper continues owning the
-terminal session until reconnect or destruction.
+terminal session until reconnect or destruction; its socket is already closed and its waits canceled.
 
 - **`ResolveDone`** — `on_resolve`: successful DNS resolution starts TCP connect.
 - **`TcpConnectDone`** — `on_connect`: successful TCP connection and SNI setup start the
@@ -269,18 +270,18 @@ terminal session until reconnect or destruction.
   the read/control callbacks and the independently optional active/passive Ping timers. Calling `close()` or
   triggering a write-failure shutdown from the delegate prevents this work from starting.
 - **`ConnectError`** — diagram shorthand for an error in any of those four completions, or SNI
-  setup failure inside `on_connect`. Emit `network_error`; no automatic `close()`.
+  setup failure inside `on_connect`. Close the transport and emit `network_error`.
 - **`ConnectionDeadline`** — `on_connection_deadline`: while `connecting`, abort the transport,
   enter `conn_failed` and emit one `network_error` with description `Connection timeout` and
   message `Connection deadline exceeded after N seconds`. The same deadline covers all four
   stages; completing a stage does not restart it. Pending setup completions are then ignored.
 - **`ConnectStartException`** — timer construction, setup allocation or DNS initiation throws
   during the caller's `connect()` invocation.
-  Set `conn_failed` and rethrow to that caller; no delegate event or automatic `close()`.
+  Set `conn_failed`, close the transport and rethrow to that caller; no delegate event.
 - **`ConnectSetupException`** — setup or operation initiation throws inside `on_resolve`,
   `on_connect`, `on_ssl_handshake`, or the connecting-phase setup in `on_handshake`.
-  Set `conn_failed`, notify through `network_error`, and finish the handler without rethrowing the
-  reported exception. No automatic `close()`. Operations started after entering connected
+  Set `conn_failed`, close the transport, notify through `network_error`, and finish the handler without
+  rethrowing the reported exception. Operations started after entering connected
   use the existing behavior and need a separate exception-cleanup policy.
 
 ### Read, control-frame and close completions

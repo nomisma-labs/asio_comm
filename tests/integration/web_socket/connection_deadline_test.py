@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: 2026 Alexey Tkachenko
 # SPDX-License-Identifier: LicenseRef-Nomisma-Labs-Proprietary
 
-"""Check one DNS-through-upgrade budget, setup lifetime and cancellation with local peers."""
+"""Check connection deadlines, cancellation and failure cleanup with local peers."""
 
 import argparse
 from concurrent.futures import ThreadPoolExecutor
@@ -20,9 +20,9 @@ from loopback_test import handshake, receive_exact
 
 
 CASES = ("tls_timeout", "upgrade_timeout", "combined_timeout", "success", "reject", "close",
-         "destroy", "reconnect", "move", "move_assign", "late_close")
+         "destroy", "reconnect", "move", "move_assign", "late_close", "tls_error")
 if sys.platform.startswith("linux"):
-    CASES += ("dns_timeout", "dns_close", "dns_destroy", "tcp_timeout")
+    CASES += ("dns_timeout", "dns_close", "dns_destroy", "tcp_timeout", "sni_error")
 
 
 def await_abort(connection):
@@ -36,6 +36,7 @@ def await_abort(connection):
 
 def run_case(client, context, certificate, mode):
     failures = []
+    peer_closed = threading.Event()
     with socket.socket() as listener:
         listener.bind(("127.0.0.1", 0))
         listener.listen(1)
@@ -53,6 +54,25 @@ def run_case(client, context, certificate, mode):
                     raw, _ = listener.accept()
                     with raw:
                         raw.settimeout(5)
+                        if mode == "sni_error":
+                            # SNI rejects host names exceeding 255 bytes before sending a TLS handshake.
+                            assert raw.recv(1) == b"", "SNI setup failure must close the TCP socket"
+                            peer_closed.set()
+                            return
+                        if mode == "tls_error":
+                            with context.wrap_socket(raw, server_side=True, do_handshake_on_connect=False) as connection:
+                                try:
+                                    connection.do_handshake()
+                                except ssl.SSLError:
+                                    pass  # Client rejects localhost's certificate for 127.0.0.1.
+                                else:
+                                    raise AssertionError("Expected TLS verification failure")
+                                # Read the underlying TCP socket, not SSL's already-failed protocol state.
+                                with socket.socket(fileno=connection.detach()) as transport:
+                                    transport.settimeout(5)
+                                    await_abort(transport)
+                                    peer_closed.set()
+                            return
                         if mode in ("tls_timeout", "close", "destroy", "move", "move_assign"):
                             await_abort(raw)
                             return
@@ -73,6 +93,8 @@ def run_case(client, context, certificate, mode):
                                     time.sleep(1.3)
                                     connection.sendall(b"\x81\x06finish")
                                 await_abort(connection)
+                                if mode == "reject":
+                                    peer_closed.set()
             except BaseException as error:
                 failures.append(error)
 
@@ -81,10 +103,26 @@ def run_case(client, context, certificate, mode):
             worker = threading.Thread(target=serve, daemon=True)
             worker.start()
         host = "slow-dns.test" if mode.startswith("dns_") else "localhost"
+        if mode == "sni_error":
+            host = "long-sni-" + "a" * 247
+        elif mode == "tls_error":
+            host = "127.0.0.1"
         env = dict(os.environ, SSL_CERT_FILE=str(certificate), SSL_CERT_DIR=str(certificate.parent / "empty"))
         try:
-            result = subprocess.run([client, f"wss://{host}:{port}/feed%2Fone?topic=two", mode],
-                                    env=env, capture_output=True, text=True, timeout=7)
+            command = [client, f"wss://{host}:{port}/feed%2Fone?topic=two", mode]
+            if mode in ("reject", "tls_error", "sni_error"):
+                process = subprocess.Popen(command, env=env, stdin=subprocess.PIPE,
+                                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                try:
+                    assert peer_closed.wait(3), f"{mode}: socket stayed open during network_error"
+                    stdout, stderr = process.communicate("peer_closed\n", timeout=7)
+                    result = subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
+                finally:
+                    if process.poll() is None:
+                        process.kill()
+                        process.communicate()
+            else:
+                result = subprocess.run(command, env=env, capture_output=True, text=True, timeout=7)
             if worker:
                 worker.join(6)
                 assert not worker.is_alive(), f"{mode}: peer did not exit"

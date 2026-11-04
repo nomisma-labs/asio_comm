@@ -92,6 +92,7 @@ including direct Boost consumers, local TLS, feeders, and source/installed-packa
 | Issue | Resolution |
 | --- | --- |
 | Initial and terminal states | An eager session starts in `init`; reconnect replaces it. Attempts that never connect terminate in `conn_failed`; established connections terminate in `disconnected`. Repeated close preserves status/identity and emits no event. |
+| Connection-failure cleanup | Connection errors and setup exceptions close the transport and cancel waits before reporting `network_error` or rethrowing an initiation exception. Applications need not close the failed connection themselves. |
 | State-machine ownership | The wrapper holds and forwards to the session. Session operations use an entry-state switch and recheck status after callbacks. Pending handlers retain shared ownership; terminal guards suppress obsolete completions while parent addresses are retained. |
 | Move/copy semantics | Custom moves update parent links and preserve an always-present session. Move construction prepares a fresh `init` source and can allocate/throw; assignment closes the former destination session. Copies remain disabled. |
 | Delegate lifetime | Each session owns its delegate. Wrapper accessors forward to it; reconnect copies borrowed callbacks before replacing the old session. Moves carry callback storage with the session. Delegate replacement and moves stay outside active delegate invocation. |

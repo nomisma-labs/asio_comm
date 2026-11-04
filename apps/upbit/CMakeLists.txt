@@ -2,3 +2,4 @@
 # SPDX-License-Identifier: LicenseRef-Nomisma-Labs-Proprietary
 
 add_subdirectory(upbit_spot_feeder)
+add_subdirectory(upbit_spot_symbol_provider)
