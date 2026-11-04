@@ -51,22 +51,18 @@ std::string_view response_error(std::string_view data) noexcept
 
 template <typename Traits> struct symbol_output
 {
-    struct context_mixin
-    {
-        bool success{};
-    };
-
     void on_response(const nom::event::symbol_information& event)
     {
         std::cout << event.data << '\n';
         std::cout.flush();
         if (!std::cout)
         {
-            LERROR("Failed to write symbol information");
+            std::cerr << "Failed to write symbol information\n";
+            nom::relay<Traits>::pass_response(this, nom::event::feed_event::failed);
             return;
         }
-        nom::ctx(this).success = true;
         std::cerr << "Received " << event.data.size() << " bytes from " << event.source << '\n';
+        nom::relay<Traits>::pass_response(this, nom::event::feed_event::completed);
     }
 };
 
@@ -96,6 +92,9 @@ public:
 
     void operator()(nom::web_socket& connection, const nom::event::on_connected&)
     {
+        nom::relay<Traits>::pass_response(this, nom::event::feed_event::connected);
+        if (!connection.is_connected())
+            return;
         // One-shot workflow: connect -> exchangeInfo -> result/error -> relay the result -> close.
         // There is no subscription ack or update stream. send() success only confirms the local write;
         // Beast continues reading (and answering server control Pings) until the response arrives.
@@ -109,7 +108,7 @@ public:
         if (!connection.send(request_))
         {
             LERROR("exchangeInfo request send failed");
-            on_request(nom::event::service_command::stop);
+            nom::relay<Traits>::pass_response(this, nom::event::feed_event::failed);
         }
     }
 
@@ -131,20 +130,22 @@ public:
                                                                              .data = event.sv_data()});
         }
         else
+        {
             LERROR("{}: {}", error, event.sv_data());
-        on_request(nom::event::service_command::stop);
+            nom::relay<Traits>::pass_response(this, nom::event::feed_event::failed);
+        }
     }
 
     void operator()(nom::web_socket&, const nom::event::on_disconnected& event)
     {
         LERROR("Disconnected before receiving symbol information: {}", event.reason);
-        on_request(nom::event::service_command::stop);
+        nom::relay<Traits>::pass_response(this, nom::event::feed_event::failed);
     }
 
     void operator()(nom::web_socket&, const nom::event::network_error& event)
     {
         LERROR("{}: {}", event.description, event.message);
-        on_request(nom::event::service_command::stop);
+        nom::relay<Traits>::pass_response(this, nom::event::feed_event::failed);
     }
 
 private:
@@ -158,7 +159,8 @@ private:
     nom::web_socket client_;
 };
 
-struct binance_spot_assembly : nom::assembly<binance_spot_assembly, asio_service, symbol_output, binance_spot_client>
+struct binance_spot_assembly
+    : nom::assembly<binance_spot_assembly, asio_service, app_terminator, symbol_output, binance_spot_client>
 {
 };
 
@@ -172,7 +174,7 @@ struct app : nom::relay<binance_spot_assembly>
     {
         request(nom::event::service_command::start);
         ctx().io.run();
-        return ctx().success ? 0 : 1;
+        return ctx().exit_code.value_or(1);
     }
 };
 
@@ -217,6 +219,9 @@ int main(int argc, char** argv)
                      "                                    [--max-message-size BYTES]\n"
                      "Fetch Spot exchangeInfo once, write its JSON response, then close.\n"
                      "Defaults: wss://ws-api.binance.com:443/ws-api/v3, 64 MiB receive limit.\n";
+        std::cout << "Optional: --exit-after-sec SECONDS (default: no runtime limit).\n"
+                     "Positive limits count from connection; 0 closes before requesting a catalog.\n"
+                     "Ctrl+C/SIGTERM stops during setup or retrieval. Exit 0 requires a written catalog.\n";
         return 0;
     }
 

@@ -17,6 +17,7 @@ inline std::string normalized_symbol(std::string symbol)
 
 struct app_config
 {
+    static constexpr bool require_completion = false;
     // Production JSON-RPC WebSocket; these public channels need no credentials.
     // BTC-PERPETUAL is the example inverse perpetual instrument, not a Spot symbol.
     // https://docs.deribit.com/articles/deribit-quickstart

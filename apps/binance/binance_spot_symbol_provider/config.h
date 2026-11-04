@@ -9,6 +9,10 @@ import nom.url;
 
 struct app_config
 {
+    // An interrupted one-shot request must not report a successful catalog fetch.
+    static constexpr bool require_completion = true;
+    // Unset adds no runtime limit; zero closes immediately after connection, before requesting data.
+    std::optional<unsigned> exit_after_sec{};
     // exchangeInfo is a public request/reply method on the Spot WS API, not a /ws stream subscription.
     // https://github.com/binance/binance-spot-api-docs/blob/master/web-socket-api.md#general-api-information
     std::string endpoint{"wss://ws-api.binance.com:443/ws-api/v3"};
@@ -41,12 +45,22 @@ inline app_config parse_arguments(int argc, char** argv)
     for (int i = 1; i < argc; ++i)
     {
         const std::string_view option{argv[i]};
-        if (option != "--endpoint" && option != "--max-message-size")
+        if (option != "--exit-after-sec" && option != "--endpoint" && option != "--max-message-size")
             throw std::invalid_argument("Unknown option: " + std::string(option));
         if (++i == argc)
             throw std::invalid_argument("Missing value for " + std::string(option));
         if (option == "--endpoint")
             config.endpoint = argv[i];
+        else if (option == "--exit-after-sec")
+        {
+            const std::string_view seconds_text{argv[i]};
+            unsigned seconds{};
+            const auto [end, error] =
+                std::from_chars(seconds_text.data(), seconds_text.data() + seconds_text.size(), seconds);
+            if (error != std::errc{} || end != seconds_text.data() + seconds_text.size())
+                throw std::invalid_argument("--exit-after-sec must be an unsigned number of seconds (0 is allowed)");
+            config.exit_after_sec = seconds;
+        }
         else
         {
             const std::string_view value{argv[i]};

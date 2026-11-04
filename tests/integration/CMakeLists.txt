@@ -99,6 +99,29 @@ if(nom_build_tests AND TARGET binance_spot_symbol_provider AND TARGET asio_comm_
 endif()
 
 if(nom_build_tests)
+    set(provider_exit_args)
+    foreach(provider IN ITEMS
+            binance_perp_symbol_provider binance_spot_symbol_provider bitflyer_spot_symbol_provider
+            bitget_spot_symbol_provider bybit_spot_symbol_provider coinbase_spot_symbol_provider
+            crypto_com_spot_symbol_provider deribit_perp_symbol_provider gate_spot_symbol_provider
+            htx_spot_symbol_provider hyperliquid_perp_symbol_provider hyperliquid_spot_symbol_provider
+            kraken_spot_symbol_provider kucoin_spot_symbol_provider lbank_spot_symbol_provider
+            mexc_spot_symbol_provider okx_spot_symbol_provider upbit_spot_symbol_provider xt_spot_symbol_provider)
+        if(TARGET ${provider})
+            list(APPEND provider_exit_args --client $<TARGET_FILE:${provider}>)
+        endif()
+    endforeach()
+    if(provider_exit_args)
+        find_package(Python 3.10 REQUIRED COMPONENTS Interpreter)
+        find_program(openssl_executable openssl REQUIRED)
+        add_test(NAME ${PROJECT_NAME}_provider_exit
+            COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/provider_exit_test.py
+                ${provider_exit_args} --openssl ${openssl_executable})
+        set_tests_properties(${PROJECT_NAME}_provider_exit PROPERTIES LABELS integration TIMEOUT 120)
+    endif()
+endif()
+
+if(nom_build_tests)
     set(exchange_feeder_args)
     foreach(exchange IN ITEMS bitflyer deribit okex)
         if(exchange STREQUAL "deribit")

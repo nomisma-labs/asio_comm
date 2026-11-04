@@ -17,6 +17,7 @@ inline std::string normalized_symbol(std::string symbol)
 
 struct app_config
 {
+    static constexpr bool require_completion = false;
     // Public JSON market data needs no login; Spot instrument IDs use BASE-QUOTE (BTC-USDT).
     // https://www.okx.com/docs-v5/en/#overview-websocket
     std::string endpoint{"wss://ws.okx.com/ws/v5/public"};

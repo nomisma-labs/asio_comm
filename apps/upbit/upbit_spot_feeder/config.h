@@ -17,6 +17,7 @@ inline std::string normalized_symbol(std::string symbol)
 
 struct app_config
 {
+    static constexpr bool require_completion = false;
     std::string endpoint{"wss://sg-api.upbit.com/websocket/v1"};
     // CLI symbols may use either case; normalized_symbol converts copies to uppercase wire identifiers.
     std::vector<std::string> symbols{"SGD-BTC"};

@@ -149,6 +149,12 @@ use the existing Binance Spot JSON symbol catalog.
 | Hyperliquid Spot | [hyperliquid_spot_symbol_provider](hyperliquid/hyperliquid_spot_symbol_provider/README.md) | `PURR/USDC`, `@1`, `@2` | `{"name":"PURR/USDC","tokens":[1,0],"index":0}` |
 | Hyperliquid perpetuals | [hyperliquid_perp_symbol_provider](hyperliquid/hyperliquid_perp_symbol_provider/README.md) | `BTC`, `ETH`, `SOL` | `{"name":"BTC","szDecimals":5,"maxLeverage":40}` |
 
+All symbol providers accept `--exit-after-sec SECONDS` and handle Ctrl+C/SIGTERM using the shared
+`app_terminator`. The timing matches feeders: omitted adds no application limit, positive values
+count from connection, and `0` closes before requesting a catalog. Transport deadlines still apply.
+Providers return **0** only after catalog output; timeout, cancellation and failure return **1**.
+The `asio_comm_provider_exit` local TLS suite checks these rules across HTTPS and WebSocket providers.
+
 ### Implementation and validation
 
 On **2026-11-05**, the 13 HTTPS-backed symbol providers were implemented with `nom::https`,
@@ -166,9 +172,9 @@ body limits, disconnects and signal cancellation; HTX incremental responses are 
 The suite passed in Debug and ASan/UBSan builds on the same date.
 
 [common_app_nodes.h](common_app_nodes.h) defines `asio_service`, `app_terminator`,
-`service_command` and `feed_event`. The shared terminator accepts each feeder's config through its
-`exit_after_sec` field. One-shot providers retain their own completion and signal policy; their local
-`provider_state` extends the shared I/O context where necessary. Exchange clients, output nodes and
+`service_command` and `feed_event`. The shared terminator reads `exit_after_sec` and
+`require_completion` from each app's config. Feeders allow successful intentional stops; providers
+require a `completed` event after catalog output for success. Exchange clients, output nodes and
 assembly composition remain explicit in each `main.cpp`.
 
 All listed feeders and symbol providers have build targets and individual READMEs. Each app keeps

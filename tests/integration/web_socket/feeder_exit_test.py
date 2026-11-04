@@ -82,7 +82,11 @@ def run_case(client, context, certificate, mode):
                             ready.set()
                             if mode == "peer_close":
                                 connection.sendall(b"\x88\x02\x03\xe8")
-                    assert connection.recv(1024) == b"", "Expected transport close with no additional frames"
+                    try:
+                        assert connection.recv(1024) == b"", "Expected transport close with no additional frames"
+                    except (ConnectionResetError, BrokenPipeError, ssl.SSLEOFError):
+                        # Immediate transport close does not exchange TLS close_notify alerts.
+                        pass
                     times["closed"] = time.monotonic()
             except BaseException as error:
                 errors.append(error)
@@ -159,6 +163,7 @@ def main():
                         "-keyout", str(key), "-out", str(certificate)], check=True, capture_output=True)
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         context.load_cert_chain(certificate, key)
+        context.num_tickets = 0
         with ThreadPoolExecutor(max_workers=4) as pool:
             results = [pool.submit(check_feeder, client, context, certificate) for client in args.client]
             for result in results:

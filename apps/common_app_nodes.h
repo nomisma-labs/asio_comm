@@ -31,6 +31,7 @@ namespace nom::event
     enum class feed_event
     {
         connected,
+        completed,
         failed
     };
 } // namespace nom::event
@@ -45,7 +46,8 @@ template <typename Traits> struct asio_service
 };
 
 // Place after asio_service and before every other stop handler: pass_request visits later nodes.
-// Config supplies std::optional<unsigned> exit_after_sec; the timer starts on feed_event::connected.
+// Config supplies exit_after_sec and require_completion; the timer starts on feed_event::connected.
+// Providers require a completed event for success and keep stop diagnostics on stderr.
 template <typename Traits> class app_terminator
 {
 public:
@@ -57,7 +59,8 @@ public:
 
     template <typename Config>
     explicit app_terminator(const Config& config)
-        : signals_(nom::ctx(this).io, SIGINT, SIGTERM), exit_after_sec_(config.exit_after_sec)
+        : signals_(nom::ctx(this).io, SIGINT, SIGTERM), exit_after_sec_(config.exit_after_sec),
+          require_completion_(config.require_completion)
     {
     }
 
@@ -71,14 +74,14 @@ public:
                 {
                     if (!error && !nom::ctx(this).exit_code)
                     {
-                        LINFO("Stopping on signal {}", signal_number);
-                        stop(0);
+                        report_stop(std::format("Stopping on signal {}", signal_number));
+                        stop(require_completion_ ? 1 : 0);
                     }
                 });
             nom::relay<Traits>::pass_request(this, command);
             break;
         case nom::event::service_command::stop:
-            stop(0);
+            stop(require_completion_ ? 1 : 0);
             break;
         }
     }
@@ -92,17 +95,21 @@ public:
                 break;
             if (*exit_after_sec_ == 0)
             {
-                LINFO("Stopping after connection (--exit-after-sec 0)");
-                stop(0);
+                report_stop("Stopping after connection (--exit-after-sec 0)");
+                stop(require_completion_ ? 1 : 0);
                 break;
             }
             exit_timer_.emplace(nom::ctx(this).io.get_executor());
             exit_timer_->arm_after(std::chrono::seconds{*exit_after_sec_},
                                    [this]
                                    {
-                                       LINFO("Stopping after {} seconds connected", *exit_after_sec_);
-                                       stop(0);
+                                       report_stop(
+                                           std::format("Stopping after {} seconds connected", *exit_after_sec_));
+                                       stop(require_completion_ ? 1 : 0);
                                    });
+            break;
+        case nom::event::feed_event::completed:
+            stop(0);
             break;
         case nom::event::feed_event::failed:
             stop(1);
@@ -111,6 +118,14 @@ public:
     }
 
 private:
+    void report_stop(std::string_view message)
+    {
+        if (require_completion_)
+            std::cerr << message << '\n';
+        else
+            LINFO("{}", message);
+    }
+
     void stop(int exit_code)
     {
         // The first stop fixes the result, even if another signal or failure is already queued.
@@ -126,4 +141,5 @@ private:
     boost::asio::signal_set signals_;
     std::optional<unsigned> exit_after_sec_;
     std::optional<nom::timer> exit_timer_;
+    bool require_completion_;
 };

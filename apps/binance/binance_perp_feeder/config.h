@@ -17,6 +17,7 @@ inline std::string normalized_symbol(std::string symbol)
 
 struct app_config
 {
+    static constexpr bool require_completion = false;
     // USD-M public streaming route: one connection carries all selected symbols/channels.
     // https://developers.binance.com/en/docs/products/derivatives-trading-usds-futures/websocket-market-streams/Connect
     std::string endpoint{"wss://fstream.binance.com/public/ws"};

@@ -9,6 +9,7 @@ import nom.url;
 
 struct app_config
 {
+    static constexpr bool require_completion = false;
     std::string endpoint{"wss://api.hyperliquid.xyz/ws"};
     // Keep metadata identifiers unchanged, including case and spot pair indexes.
     std::vector<std::string> symbols{"@107"};

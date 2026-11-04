@@ -11,6 +11,7 @@ Transport failures, detected API errors, missing/non-200 status, and output fail
 cmake --preset dev
 cmake --build --preset dev --target binance_spot_symbol_provider
 ./build/dev/bin/binance_spot_symbol_provider > exchange_info.json
+./build/dev/bin/binance_spot_symbol_provider --exit-after-sec 10 > symbols.json
 ```
 
 On success, stdout contains the complete response followed by a newline. A byte count goes
@@ -18,7 +19,7 @@ to stderr. Failure diagnostics may also appear in the logger's console output;
 check the exit status before using the output file.
 
 Defaults live in `app_config` in [config.h](config.h): the endpoint, a 64 MiB incoming-message
-limit, and `nom::log_config`. The two command-line overrides are:
+limit, and `nom::log_config`. Command-line overrides include:
 
 ```bash
 ./build/dev/bin/binance_spot_symbol_provider --endpoint wss://ws-api.binance.com:9443/ws-api/v3
@@ -26,8 +27,26 @@ limit, and `nom::log_config`. The two command-line overrides are:
 ./build/dev/bin/binance_spot_symbol_provider --help
 ```
 
-There is one connection, one request, and no reconnect or application deadline.
+There is one connection, one request, and no reconnect. The optional runtime limit is described below.
 `--max-message-size` accepts a byte count in `[1, UINT_MAX]`.
+
+## Runtime and shutdown
+
+`--exit-after-sec SECONDS` has the same timing as the feeders: omitted means no additional
+application limit, positive values count from connection (TLS for HTTPS; WebSocket handshake for
+WS), and `0` closes immediately after connection before requesting a catalog. Existing transport
+connection/request deadlines still apply; this limit excludes connection setup.
+
+Ctrl+C (`SIGINT`) and `SIGTERM` stop during setup or retrieval. A provider exits **0** only after
+writing a complete catalog. Timeout, cancellation (including `--exit-after-sec 0`), connection/API
+errors and output failure exit **1**. Stops close the transport, cancel the exit timer and signal
+wait, drain pending callbacks and flush the logger. Stop diagnostics go to stderr. Timer and signal
+handlers share the I/O thread, so synchronous output can delay their execution.
+
+The shared `app_terminator` precedes the output/client nodes. Clients relay `connected`/`failed`;
+`symbol_output` relays `completed` after writing the catalog. The provider config sets
+`require_completion = true`, preserving the one-shot success contract with the shared stop logic.
+The `asio_comm_provider_exit` local TLS suite covers these paths for every provider.
 
 ## Request and response
 
@@ -55,9 +74,9 @@ does not bound total process memory.
 
 ## Assembly and validation
 
-The shared I/O node and service commands are defined in [common_app_nodes.h](../../common_app_nodes.h).
+The shared I/O node, terminator and lifecycle events are defined in [common_app_nodes.h](../../common_app_nodes.h).
 
-`asio_service` supplies the shared `io_context`; `symbol_output` owns the completion result.
+`asio_service` supplies the shared `io_context`; `app_terminator` owns the exit result, signal wait and optional exit timer.
 `binance_spot_client`
 adapts WebSocket callbacks into `nom::event::symbol_information`; `symbol_output` writes the
 response. `app` starts the request through `nom::relay` and runs the context until callbacks drain.

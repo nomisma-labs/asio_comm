@@ -10,11 +10,30 @@ From the repository root, after installing the [build prerequisites](../../../do
 cmake --preset dev
 cmake --build --preset dev --target hyperliquid_spot_symbol_provider
 ./build/dev/bin/hyperliquid_spot_symbol_provider > symbols.json
+./build/dev/bin/hyperliquid_spot_symbol_provider --exit-after-sec 10 > symbols.json
 ./build/dev/bin/hyperliquid_spot_symbol_provider --help
 ```
 
 Default endpoint: `wss://api.hyperliquid.xyz/ws`. `--endpoint` overrides it for alternate regions or local TLS peers.
 `--max-message-size BYTES` sets the incoming-message limit (default 64 MiB).
+
+## Runtime and shutdown
+
+`--exit-after-sec SECONDS` has the same timing as the feeders: omitted means no additional
+application limit, positive values count from connection (TLS for HTTPS; WebSocket handshake for
+WS), and `0` closes immediately after connection before requesting a catalog. Existing transport
+connection/request deadlines still apply; this limit excludes connection setup.
+
+Ctrl+C (`SIGINT`) and `SIGTERM` stop during setup or retrieval. A provider exits **0** only after
+writing a complete catalog. Timeout, cancellation (including `--exit-after-sec 0`), connection/API
+errors and output failure exit **1**. Stops close the transport, cancel the exit timer and signal
+wait, drain pending callbacks and flush the logger. Stop diagnostics go to stderr. Timer and signal
+handlers share the I/O thread, so synchronous output can delay their execution.
+
+The shared `app_terminator` precedes the output/client nodes. Clients relay `connected`/`failed`;
+`symbol_output` relays `completed` after writing the catalog. The provider config sets
+`require_completion = true`, preserving the one-shot success contract with the shared stop logic.
+The `asio_comm_provider_exit` local TLS suite covers these paths for every provider.
 
 ## API decisions
 
@@ -25,11 +44,11 @@ Sends an info `spotMeta` request inside the WebSocket `post` envelope. The respo
 
 ## Assembly integration
 
-The shared I/O node and service commands are defined in [common_app_nodes.h](../../common_app_nodes.h).
+The shared I/O node, terminator and lifecycle events are defined in [common_app_nodes.h](../../common_app_nodes.h).
 
 [config.h](config.h) contains defaults, argument parsing and `app_config::validate()`. Validation returns
 `std::expected<void, std::string>` and leaves the configuration unchanged. In [main.cpp](main.cpp),
-`provider_state` extends the shared I/O context with signals and the completion result.
+`asio_service` owns the I/O context, and `app_terminator` owns signals, the optional exit timer and the exit result.
 `hyperliquid_spot_client` owns the WebSocket and its protocol callbacks, and `symbol_output`
 consumes responses through `nom::relay<Traits>::pass_response`. `hyperliquid_spot_assembly` combines these
 nodes; `app` starts them through the relay and runs the single I/O thread. Any required heartbeat

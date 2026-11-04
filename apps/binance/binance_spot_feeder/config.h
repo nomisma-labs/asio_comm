@@ -17,6 +17,7 @@ inline std::string normalized_symbol(std::string symbol)
 
 struct app_config
 {
+    static constexpr bool require_completion = false;
     // Public streaming endpoint; /ws delivers unwrapped events for all subscribed streams.
     // https://github.com/binance/binance-spot-api-docs/blob/master/web-socket-streams.md#general-wss-information
     std::string endpoint{"wss://stream.binance.com:443/ws"};

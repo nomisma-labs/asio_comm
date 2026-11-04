@@ -70,15 +70,6 @@ bool is_catalog(std::string_view data)
     return response_field(data, "code") == R"("00000")" && response_field(data, "data").starts_with('[');
 }
 
-template <typename Traits> struct provider_state
-{
-    struct context_mixin : asio_service<Traits>::context_mixin
-    {
-        boost::asio::signal_set signals{this->io, SIGINT, SIGTERM};
-        bool success{};
-    };
-};
-
 template <typename Traits> struct symbol_output
 {
     void on_response(const nom::event::symbol_information& event)
@@ -88,10 +79,11 @@ template <typename Traits> struct symbol_output
         if (!std::cout)
         {
             std::cerr << "Failed to write symbol information\n";
+            nom::relay<Traits>::pass_response(this, nom::event::feed_event::failed);
             return;
         }
-        nom::ctx(this).success = true;
         std::cerr << "Received " << event.data.size() << " bytes from " << event.source << '\n';
+        nom::relay<Traits>::pass_response(this, nom::event::feed_event::completed);
     }
 };
 
@@ -115,7 +107,6 @@ public:
             client_.connect(nom::https::https_delegate{std::ref(*this)});
             break;
         case nom::event::service_command::stop:
-            nom::ctx(this).signals.cancel();
             client_.close();
             break;
         }
@@ -123,6 +114,9 @@ public:
 
     void operator()(nom::https& connection, const nom::event::on_connected&)
     {
+        nom::relay<Traits>::pass_response(this, nom::event::feed_event::connected);
+        if (!connection.is_connected())
+            return;
         // GET /api/v3/market/instruments?category=SPOT
         // category=SPOT selects the V3 Spot catalog; omit symbol to fetch all instruments. The returned
         // category can include tokenized assets; preserve the full response rather than assuming every entry
@@ -141,36 +135,42 @@ public:
     {
         // Connect -> GET -> complete response -> check status/envelope -> relay -> close.
         if (response.status_code != 200)
+        {
             std::cerr << "Catalog request failed: HTTP " << response.status_code << ": "
                       << std::string_view(response.body).substr(0, 512) << '\n';
+            nom::relay<Traits>::pass_response(this, nom::event::feed_event::failed);
+        }
         else if (!is_catalog(response.body))
+        {
             std::cerr << "API error or unexpected catalog response: " << std::string_view(response.body).substr(0, 512)
                       << '\n';
+            nom::relay<Traits>::pass_response(this, nom::event::feed_event::failed);
+        }
         else
             nom::relay<Traits>::pass_response(this,
                                               nom::event::symbol_information{.ts = response.ts,
                                                                              .source = connection.session_id(),
                                                                              .data = response.body});
-        on_request(nom::event::service_command::stop);
     }
 
     void operator()(nom::https&, const nom::event::on_disconnected& event)
     {
         std::cerr << "Disconnected before receiving a catalog: " << event.reason << '\n';
-        on_request(nom::event::service_command::stop);
+        nom::relay<Traits>::pass_response(this, nom::event::feed_event::failed);
     }
 
     void operator()(nom::https&, const nom::event::network_error& event)
     {
         std::cerr << event.description << ": " << event.message << '\n';
-        on_request(nom::event::service_command::stop);
+        nom::relay<Traits>::pass_response(this, nom::event::feed_event::failed);
     }
 
 private:
     nom::https client_;
 };
 
-struct bitget_spot_assembly : nom::assembly<bitget_spot_assembly, provider_state, symbol_output, bitget_spot_client>
+struct bitget_spot_assembly
+    : nom::assembly<bitget_spot_assembly, asio_service, app_terminator, symbol_output, bitget_spot_client>
 {
 };
 
@@ -182,16 +182,10 @@ struct app : nom::relay<bitget_spot_assembly>
 
     int start()
     {
-        ctx().signals.async_wait(
-            [this](const boost::system::error_code& error, int)
-            {
-                if (!error)
-                    request(nom::event::service_command::stop);
-            });
         request(nom::event::service_command::start);
         // Drain canceled completions while the assembly and its nodes remain alive.
         ctx().io.run();
-        return ctx().success ? 0 : 1;
+        return ctx().exit_code.value_or(1);
     }
 };
 
@@ -202,6 +196,9 @@ int main(int argc, char** argv)
         std::cout << "Usage: bitget_spot_symbol_provider [--endpoint https://HOST/PATH] [--max-response-size BYTES]\n"
                      "Default endpoint: "
                   << app_config{}.endpoint << '\n';
+        std::cout << "Optional: --exit-after-sec SECONDS (default: no runtime limit).\n"
+                     "Positive limits count from connection; 0 closes before requesting a catalog.\n"
+                     "Ctrl+C/SIGTERM stops during setup or retrieval. Exit 0 requires a written catalog.\n";
         return 0;
     }
     try

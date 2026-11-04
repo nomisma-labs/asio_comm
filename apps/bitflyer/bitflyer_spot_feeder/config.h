@@ -17,6 +17,7 @@ inline std::string normalized_symbol(std::string symbol)
 
 struct app_config
 {
+    static constexpr bool require_completion = false;
     // Use raw JSON-RPC over WebSocket, which fits nom::web_socket; Socket.IO has additional framing.
     // Product codes such as BTC_JPY identify these public channels; no authentication is needed.
     // https://bf-lightning-api.readme.io/docs/endpoint-json-rpc
