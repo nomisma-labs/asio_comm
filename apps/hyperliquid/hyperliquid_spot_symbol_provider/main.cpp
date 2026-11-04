@@ -1,17 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Alexey Tkachenko
 // SPDX-License-Identifier: LicenseRef-Nomisma-Labs-Proprietary
 
-// GCC 16's Ubuntu snapshot needs stdio declarations before module imports at -O2.
-#if defined(__GNUC__) && !defined(__clang__) && __GNUC__ == 16
-#include <cstdio>
-#endif
-
-#include <boost/asio/any_io_executor.hpp>
-#include <boost/asio/io_context.hpp>
-#include <boost/asio/signal_set.hpp>
-#include <boost/system/error_code.hpp>
-#include <csignal>
-#include <spd_logger/logging.h>
+#include "../../common_app_nodes.h"
 
 import std;
 import nom.asio_comm;
@@ -22,12 +12,6 @@ import nom.spd_logger;
 
 namespace nom::event
 {
-    enum class service_command
-    {
-        start,
-        stop
-    };
-
     // Borrowed views are consumed synchronously before the WebSocket callback returns.
     struct symbol_information
     {
@@ -90,14 +74,12 @@ bool is_catalog(std::string_view data)
            !response_field(data, "tokens").empty() && !response_field(data, "universe").empty();
 }
 
-template <typename Traits> struct asio_service
+template <typename Traits> struct provider_state
 {
-    struct context_mixin
+    struct context_mixin : asio_service<Traits>::context_mixin
     {
-        // Context services outlive the assembly's nodes and their asynchronous operations.
-        boost::asio::io_context io;
-        boost::asio::signal_set signals{io, SIGINT, SIGTERM};
-        bool success{false};
+        boost::asio::signal_set signals{this->io, SIGINT, SIGTERM};
+        bool success{};
     };
 };
 
@@ -191,7 +173,7 @@ private:
 };
 
 struct hyperliquid_spot_assembly
-    : nom::assembly<hyperliquid_spot_assembly, asio_service, symbol_output, hyperliquid_spot_client>
+    : nom::assembly<hyperliquid_spot_assembly, provider_state, symbol_output, hyperliquid_spot_client>
 {
 };
 

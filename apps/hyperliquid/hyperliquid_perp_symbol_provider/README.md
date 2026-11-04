@@ -25,10 +25,12 @@ Sends an info `meta` request inside the WebSocket `post` envelope. Returns the d
 
 ## Assembly integration
 
+The shared I/O node and service commands are defined in [common_app_nodes.h](../../common_app_nodes.h).
+
 [config.h](config.h) contains defaults, argument parsing and `app_config::validate()`. Validation returns
 `std::expected<void, std::string>` and leaves the configuration unchanged. In [main.cpp](main.cpp),
-`asio_service` owns the
-I/O context, `hyperliquid_perp_client` owns the WebSocket and its protocol callbacks, and `symbol_output`
+`provider_state` extends the shared I/O context with signals and the completion result.
+`hyperliquid_perp_client` owns the WebSocket and its protocol callbacks, and `symbol_output`
 consumes responses through `nom::relay<Traits>::pass_response`. `hyperliquid_perp_assembly` combines these
 nodes; `app` starts them through the relay and runs the single I/O thread. Any required heartbeat
 or subscription timer belongs to the client node. Borrowed response views are consumed synchronously.

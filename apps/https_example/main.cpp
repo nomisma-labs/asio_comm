@@ -1,14 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Alexey Tkachenko
 // SPDX-License-Identifier: LicenseRef-Nomisma-Labs-Proprietary
 
-#if defined(__GNUC__) && !defined(__clang__) && __GNUC__ == 16
-#include <cstdio>
-#endif
-
-#include <spd_logger/logging.h>
-
-#include <boost/asio/any_io_executor.hpp>
-#include <boost/asio/io_context.hpp>
+#include "../common_app_nodes.h"
 
 import std;
 import nom.asio_comm;
@@ -17,24 +10,10 @@ import nom.spd_logger;
 
 #include "config.h"
 
-enum class command
-{
-    start,
-    stop
-};
 struct response_received
 {
     nom::https::request_id id;
     const nom::http_response& response;
-};
-
-template <typename Traits> struct asio_service
-{
-    struct context_mixin
-    {
-        boost::asio::io_context io;
-        bool success{};
-    };
 };
 
 template <typename Traits> struct response_output
@@ -52,19 +31,24 @@ template <typename Traits> struct response_output
 template <typename Traits> class https_client
 {
 public:
+    struct context_mixin
+    {
+        bool success{};
+    };
+
     explicit https_client(const app_config& config)
         : client_(nom::ctx(this).io.get_executor(), nom::url(config.endpoint)), remaining_(config.requests)
     {
     }
 
-    void on_request(command action)
+    void on_request(nom::event::service_command action)
     {
         switch (action)
         {
-        case command::start:
+        case nom::event::service_command::start:
             client_.connect(nom::https::https_delegate{std::ref(*this)});
             break;
-        case command::stop:
+        case nom::event::service_command::stop:
             client_.close();
             break;
         }
@@ -123,7 +107,7 @@ struct app : nom::relay<app_assembly>
     }
     int run()
     {
-        request(command::start);
+        request(nom::event::service_command::start);
         ctx().io.run();
         return ctx().success ? 0 : 1;
     }

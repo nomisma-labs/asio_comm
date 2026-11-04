@@ -65,13 +65,26 @@ if(nom_build_tests AND TARGET binance_spot_resubscribe_test)
     set_tests_properties(${PROJECT_NAME}_binance_spot_resubscribe PROPERTIES LABELS integration TIMEOUT 30)
 endif()
 
-if(nom_build_tests AND TARGET binance_perp_feeder)
-    find_package(Python 3.10 REQUIRED COMPONENTS Interpreter)
-    find_program(openssl_executable openssl REQUIRED)
-    add_test(NAME ${PROJECT_NAME}_binance_perp_exit
-        COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/web_socket/binance_perp_exit_test.py
-            --client $<TARGET_FILE:binance_perp_feeder> --openssl ${openssl_executable})
-    set_tests_properties(${PROJECT_NAME}_binance_perp_exit PROPERTIES LABELS integration TIMEOUT 30)
+if(nom_build_tests)
+    set(feeder_exit_args)
+    foreach(feeder IN ITEMS
+            binance_perp_feeder binance_spot_feeder binance_spot_sbe_feeder
+            bitflyer_spot_feeder bitget_spot_feeder bybit_spot_feeder coinbase_spot_feeder
+            crypto_com_spot_feeder deribit_perp_feeder gate_spot_feeder htx_spot_feeder
+            hyperliquid_perp_feeder hyperliquid_spot_feeder kraken_spot_feeder kucoin_spot_feeder
+            lbank_spot_feeder mexc_spot_feeder okex_spot_feeder upbit_spot_feeder xt_spot_feeder)
+        if(TARGET ${feeder})
+            list(APPEND feeder_exit_args --client $<TARGET_FILE:${feeder}>)
+        endif()
+    endforeach()
+    if(feeder_exit_args)
+        find_package(Python 3.10 REQUIRED COMPONENTS Interpreter)
+        find_program(openssl_executable openssl REQUIRED)
+        add_test(NAME ${PROJECT_NAME}_feeder_exit
+            COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/web_socket/feeder_exit_test.py
+                ${feeder_exit_args} --openssl ${openssl_executable})
+        set_tests_properties(${PROJECT_NAME}_feeder_exit PROPERTIES LABELS integration TIMEOUT 120)
+    endif()
 endif()
 
 if(nom_build_tests AND TARGET binance_spot_symbol_provider AND TARGET asio_comm_large_messages_client)

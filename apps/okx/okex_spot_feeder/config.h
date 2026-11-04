@@ -24,6 +24,8 @@ struct app_config
     // spelling (btc-usdt -> BTC-USDT). Lowercase channel aliases are mapped to API names separately.
     std::vector<std::string> symbols{"BTC-USDT"};
     std::vector<std::string> channels{"ticker", "trade", "depth"};
+    // Unset runs indefinitely; zero closes immediately after the WebSocket handshake.
+    std::optional<unsigned> exit_after_sec{};
     nom::log_config log{.level = nom::log_level::info};
 
     [[nodiscard]] std::expected<void, std::string> validate() const
@@ -86,7 +88,7 @@ inline app_config parse_arguments(int argc, char** argv)
     for (int i = 1; i < argc; ++i)
     {
         const std::string_view option{argv[i]};
-        if (option != "--symbols" && option != "--channels" && option != "--endpoint")
+        if (option != "--symbols" && option != "--channels" && option != "--endpoint" && option != "--exit-after-sec")
             throw std::invalid_argument("Unknown option: " + std::string(option));
         if (++i == argc)
             throw std::invalid_argument("Missing value for " + std::string(option));
@@ -94,8 +96,18 @@ inline app_config parse_arguments(int argc, char** argv)
             config.symbols = split_list(argv[i]);
         else if (option == "--channels")
             config.channels = split_list(argv[i]);
-        else
+        else if (option == "--endpoint")
             config.endpoint = argv[i];
+        else if (option == "--exit-after-sec")
+        {
+            const std::string_view seconds_text{argv[i]};
+            unsigned seconds{};
+            const auto [end, error] =
+                std::from_chars(seconds_text.data(), seconds_text.data() + seconds_text.size(), seconds);
+            if (error != std::errc{} || end != seconds_text.data() + seconds_text.size())
+                throw std::invalid_argument("--exit-after-sec must be an unsigned number of seconds (0 is allowed)");
+            config.exit_after_sec = seconds;
+        }
     }
     return config;
 }

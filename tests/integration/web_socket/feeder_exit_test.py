@@ -2,9 +2,10 @@
 # SPDX-FileCopyrightText: 2026 Alexey Tkachenko
 # SPDX-License-Identifier: LicenseRef-Nomisma-Labs-Proprietary
 
-"""Check the Binance perpetual feeder's runtime limit and signal-driven shutdown."""
+"""Check every feeder's runtime limit, relay-driven shutdown and exit status using local TLS peers."""
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 import json
 import os
 from pathlib import Path
@@ -17,13 +18,28 @@ import threading
 import time
 
 from loopback_test import handshake, read_frame
+from exchange_apps_test import FEEDERS
+from feeders_test import subscriptions
+
+
+def feeder_subscription(client):
+    if client.name in FEEDERS:
+        return FEEDERS[client.name]
+    if client.name in ("binance_spot_feeder", "binance_perp_feeder"):
+        return "BTCUSDT,ETHUSDT", [{"method": "SUBSCRIBE", "params": ["btcusdt@trade", "ethusdt@trade"], "id": 1}]
+    exchange = client.name.split("_")[0]
+    symbols = {"bitflyer": ["BTC_JPY", "ETH_JPY"], "deribit": ["BTC-PERPETUAL", "ETH-PERPETUAL"],
+               "okex": ["BTC-USDT", "ETH-USDT"]}[exchange]
+    return ",".join(symbols), subscriptions(exchange, symbols, ["trade"])
 
 
 def run_case(client, context, certificate, mode):
     errors = []
     ready = threading.Event()
     times = {}
-    message = b'{"e":"trade","s":"BTCUSDT","p":"100","q":"1"}'
+    symbols, requests = feeder_subscription(client)
+    # Crypto.com deliberately waits one second before subscribing.
+    runtime_sec = 2 if client.name == "crypto_com_spot_feeder" else 1
     with socket.socket() as listener:
         listener.bind(("127.0.0.1", 0))
         listener.listen(1)
@@ -46,14 +62,22 @@ def run_case(client, context, certificate, mode):
                         if mode == "timeout":
                             # A one-second runtime limit must not expire during connection setup.
                             time.sleep(1.2)
-                        handshake(connection, port, target="/public/ws", reject=mode == "rejected")
+                        headers = {"x-mbx-apikey": "loopback-test-only"} if "sbe" in client.name else {}
+                        handshake(connection, port, expected_headers=headers,
+                                  target="/public/ws", reject=mode == "rejected")
                         times["connected"] = time.monotonic()
                         if mode not in ("zero", "rejected"):
-                            opcode, payload = read_frame(connection)
-                            assert opcode == 0x81
-                            assert json.loads(payload) == {
-                                "method": "SUBSCRIBE", "params": ["btcusdt@trade"], "id": 1}
-                            connection.sendall(bytes((0x81, len(message))) + message + b"\x89\x04exit")
+                            if mode != "signal_subscribing":
+                                for request in requests:
+                                    opcode, payload = read_frame(connection)
+                                    assert opcode == 0x81
+                                    actual = json.loads(payload)
+                                    if isinstance(actual, dict):
+                                        actual.pop("time", None)
+                                        actual.pop("nonce", None)
+                                    assert actual == request, (actual, request)
+                            # Confirm the read loop is active. No market data is needed for timed exit.
+                            connection.sendall(b"\x89\x04exit")
                             assert read_frame(connection) == (0x8A, b"exit")
                             ready.set()
                             if mode == "peer_close":
@@ -67,15 +91,19 @@ def run_case(client, context, certificate, mode):
         worker = threading.Thread(target=serve, daemon=True)
         worker.start()
         options = [] if mode == "sigterm_default" else ["--exit-after-sec", {
-            "zero": "0", "timeout": "1", "sigint": "30", "signal_connecting": "0",
+            "zero": "0", "timeout": str(runtime_sec), "sigint": "30", "signal_connecting": "0",
+            "signal_subscribing": "30",
             "peer_close": "4294967295", "rejected": "0",
         }[mode]]
-        command = [client, "--channels", "trade", *options, "--endpoint", f"wss://localhost:{port}/public/ws"]
-        env = dict(os.environ, SSL_CERT_FILE=str(certificate), SSL_CERT_DIR=str(certificate.parent / "empty"))
+        command = [str(client), "--symbols", symbols, "--channels", "trade", *options,
+                   "--endpoint", f"wss://localhost:{port}/public/ws"]
+        env = dict(os.environ, SSL_CERT_FILE=str(certificate), SSL_CERT_DIR=str(certificate.parent / "empty"),
+                   BINANCE_SBE_API_KEY="loopback-test-only")
         process = subprocess.Popen(command, env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         try:
-            if mode in ("sigint", "sigterm_default", "signal_connecting"):
+            if mode in ("sigint", "sigterm_default", "signal_connecting", "signal_subscribing"):
                 assert ready.wait(5), "Client did not reach the signal test point"
+                assert not errors, errors
                 if mode == "sigterm_default":
                     time.sleep(1.2)
                     assert process.poll() is None, "Default runtime should be unlimited"
@@ -88,36 +116,41 @@ def run_case(client, context, certificate, mode):
         worker.join(6)
         output = stdout + stderr
         assert not worker.is_alive(), "Server did not finish"
-        assert not errors, f"{mode}: {errors}; {output}"
+        assert not errors, f"{client.name}/{mode}: {errors}; {output}"
         assert process.returncode == (1 if mode in ("peer_close", "rejected") else 0), output
         assert output.count("Connected:") == (0 if mode in ("signal_connecting", "rejected") else 1), output
-        if mode in ("zero", "signal_connecting", "rejected"):
+        if mode in ("zero", "signal_connecting", "signal_subscribing", "rejected"):
             assert "Subscribing:" not in output, output
-        else:
-            assert message.decode() in output, output
         if mode == "timeout":
-            assert 0.85 <= times["closed"] - times["connected"] < 4, times
-            assert "Stopping after 1 seconds connected" in output, output
+            assert runtime_sec - 0.15 <= times["closed"] - times["connected"] < runtime_sec + 3, times
+            assert f"Stopping after {runtime_sec} seconds connected" in output, output
         elif mode == "zero":
             assert "Stopping after connection" in output, output
-        elif mode in ("sigint", "sigterm_default", "signal_connecting"):
+        elif mode in ("sigint", "sigterm_default", "signal_connecting", "signal_subscribing"):
             assert "Stopping on signal" in output and "seconds connected" not in output, output
         else:
             assert "Stopping after" not in output, output
-        print(f"{mode}: passed")
+        print(f"{client.name}/{mode}: passed", flush=True)
+
+
+def check_feeder(client, context, certificate):
+    for options in (["--exit-after-sec"], *(["--exit-after-sec", value]
+                    for value in ("-1", "1.5", "abc", "", "4294967296"))):
+        result = subprocess.run([str(client), *options], capture_output=True, text=True, timeout=3)
+        assert result.returncode == 1 and result.stderr and "Connecting" not in result.stdout, result
+    result = subprocess.run([str(client), "--help"], capture_output=True, text=True, timeout=3)
+    assert result.returncode == 0 and "--exit-after-sec" in result.stdout
+    for mode in ("zero", "timeout", "sigint", "sigterm_default", "signal_connecting", "peer_close", "rejected"):
+        run_case(client, context, certificate, mode)
+    if client.name == "crypto_com_spot_feeder":
+        run_case(client, context, certificate, "signal_subscribing")
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--client", required=True)
+    parser.add_argument("--client", type=Path, action="append", required=True)
     parser.add_argument("--openssl", required=True)
     args = parser.parse_args()
-    for options in (["--exit-after-sec"], *(["--exit-after-sec", value]
-                    for value in ("-1", "1.5", "abc", "", "4294967296"))):
-        result = subprocess.run([args.client, *options], capture_output=True, text=True, timeout=3)
-        assert result.returncode == 1 and result.stderr and "Connecting" not in result.stdout, result
-    result = subprocess.run([args.client, "--help"], capture_output=True, text=True, timeout=3)
-    assert result.returncode == 0 and "--exit-after-sec" in result.stdout
     with tempfile.TemporaryDirectory(prefix="asio-feeder-exit-") as temporary:
         folder = Path(temporary)
         certificate, key = folder / "cert.pem", folder / "key.pem"
@@ -126,8 +159,10 @@ def main():
                         "-keyout", str(key), "-out", str(certificate)], check=True, capture_output=True)
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         context.load_cert_chain(certificate, key)
-        for mode in ("zero", "timeout", "sigint", "sigterm_default", "signal_connecting", "peer_close", "rejected"):
-            run_case(args.client, context, certificate, mode)
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            results = [pool.submit(check_feeder, client, context, certificate) for client in args.client]
+            for result in results:
+                result.result()
 
 
 if __name__ == "__main__":

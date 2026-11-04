@@ -14,6 +14,17 @@ cmake --preset dev
 cmake --build --preset dev --target binance_spot_feeder binance_spot_symbol_provider
 ```
 
+Group targets build all feeders or all symbol providers, including in `dev`:
+
+```sh
+cmake --build --preset dev --target feeders
+cmake --build --preset dev --target providers
+# Build both groups together:
+cmake --build --preset dev --target feeders providers
+```
+
+These targets do not change which apps participate in a preset's default build.
+
 The tables track the target exchange coverage. App links identify implemented examples and their
 API references. All providers previously blocked by missing HTTPS support are implemented;
 catalog scope is stated where it differs from the feeder. Unverified hosting cells remain explicit.
@@ -35,6 +46,20 @@ source comments explain subscription limits and API decisions.
 
 Application heartbeat and subscription-pacing waits use [`nom::timer`](../docs/asio_comm/timer.md).
 Cancellation suppresses pending callbacks, including expiries already queued for delivery.
+
+Every feeder accepts `--exit-after-sec SECONDS`: omitted means unlimited, a positive value counts
+from the completed WebSocket handshake (independent of received data), and `0` closes immediately
+after connection before subscribing. Connection setup retains its separate WebSocket deadline.
+Ctrl+C (`SIGINT`) and `SIGTERM` work during setup and streaming. Intentional stops exit **0**;
+connection failures and unexpected disconnects exit **1**. Stops cancel owned timers and signal
+waits, close the transport, drain callbacks and flush logs; they do not wait for a WebSocket closing
+handshake. The `asio_comm_feeder_exit` integration suite checks this contract for all feeders using
+local TLS peers.
+
+Feeders use the `app_terminator` Assembly node from [common_app_nodes.h](common_app_nodes.h),
+before every other stop handler. It owns signals, an optional `nom::timer` and the exit result; clients
+relay connection/failure events and own their exchange-specific timers. Relay forwarding starts after
+the originating node, so this ordering is required for the stop command to reach every interested node.
 
 Frequencies below describe exchange publication intervals, not guaranteed delivery latency.
 Event-driven streams can be silent when nothing changes. Locations concern serving infrastructure,
@@ -139,6 +164,12 @@ The `asio_comm_https_symbol_providers` local TLS suite covers all 13 apps: exact
 chunked/large responses, unchanged stdout JSON, API/HTTP errors, unexpected/compressed replies,
 body limits, disconnects and signal cancellation; HTX incremental responses are rejected.
 The suite passed in Debug and ASan/UBSan builds on the same date.
+
+[common_app_nodes.h](common_app_nodes.h) defines `asio_service`, `app_terminator`,
+`service_command` and `feed_event`. The shared terminator accepts each feeder's config through its
+`exit_after_sec` field. One-shot providers retain their own completion and signal policy; their local
+`provider_state` extends the shared I/O context where necessary. Exchange clients, output nodes and
+assembly composition remain explicit in each `main.cpp`.
 
 All listed feeders and symbol providers have build targets and individual READMEs. Each app keeps
 defaults, argument parsing and `app_config::validate()` in its own `config.h`.

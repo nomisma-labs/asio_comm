@@ -2,7 +2,8 @@
 
 A small Assembly/relay application: arm `nom::timer`, relay each expiry to an output node,
 and rearm until the requested number of ticks has been delivered. Configuration and validation
-are in [config.h](config.h).
+are in [config.h](config.h). The I/O node and service commands come from
+[common_app_nodes.h](../common_app_nodes.h); completion state belongs to the timer source.
 
 ```sh
 cmake --preset dev

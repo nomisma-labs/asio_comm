@@ -71,6 +71,9 @@ to private data. See the [WebSocket constraints](../../../docs/asio_comm/web_soc
 
 ## Assembly structure
 
+The I/O node, terminator and lifecycle events are shared in [common_app_nodes.h](../../common_app_nodes.h).
+Exchange nodes and assembly composition remain in [main.cpp](main.cpp).
+
 `binance_perp_assembly` composes four nodes:
 
 - `asio_service` owns the shared I/O context in its context mixin.
@@ -81,7 +84,8 @@ to private data. See the [WebSocket constraints](../../../docs/asio_comm/web_soc
 Start passes through `app_terminator`, which arms the signal wait before forwarding to the client.
 The client reports connection/failure events through `pass_response`. The terminator creates its
 `nom::timer` only for a positive runtime limit after connection; on stop it cancels its waits and
-forwards the stop command through `pass_request`. Relay delivery is synchronous, so the client
+forwards the stop command through `pass_request`. The terminator must precede every other
+stop handler because `pass_request` starts after its originating node. Relay delivery is synchronous, so the client
 checks whether the connection was closed before subscribing. `app` runs the context on one thread
 and returns the exit result. Payload/source views are borrowed only during delivery, and the
 context outlives all nodes.
@@ -91,7 +95,7 @@ context outlives all nodes.
 The local TLS integration checks verify one connection with multiple symbols and channels,
 exact `trade` subscriptions, individual-trade payload logging, channel selection, ping/pong,
 and disconnection cleanup. They use a local peer and do not establish exchange availability.
-The `asio_comm_binance_perp_exit` suite checks zero/positive limits, delayed connection setup,
+The `asio_comm_feeder_exit` suite checks zero/positive limits, delayed connection setup,
 Ctrl+C/SIGTERM, cancellation during setup, failure exit codes and argument validation.
 Zero/one-second limits and Ctrl+C after receiving trades were also verified against the public
 endpoint on 2026-11-05; each intentional stop exited successfully.

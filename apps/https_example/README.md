@@ -18,7 +18,9 @@ Non-2xx responses are still printed, then the app exits unsuccessfully. Redirect
 The endpoint must keep the connection alive for repeated requests; the example does not reconnect,
 parse JSON, authenticate, sign orders, retry, or enforce exchange-specific quotas.
 
-The Assembly nodes are the Asio context, response output, and HTTPS client; relay delivery is
+The I/O node and service commands come from [common_app_nodes.h](../common_app_nodes.h);
+completion state belongs to the HTTPS client. The Assembly nodes are the Asio context, response output,
+and HTTPS client; relay delivery is
 synchronous and response references must not be retained. The client provides connection/request
 and internal TLS shutdown deadlines using [the HTTPS contract](../../docs/asio_comm/https.md). The example
 requires no application connection timer. It is included in normal build presets, including `dev`.

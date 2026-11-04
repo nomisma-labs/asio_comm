@@ -23,6 +23,8 @@ struct app_config
     std::vector<std::string> channels{"ticker", "trade", "depth"};
     // Explicit receive budget, not an initial allocation or the TCP socket buffer size.
     unsigned max_message_size{16 * 1024 * 1024};
+    // Unset runs indefinitely; zero closes immediately after the WebSocket handshake.
+    std::optional<unsigned> exit_after_sec{};
     nom::log_config log{.level = nom::log_level::info};
 
     [[nodiscard]] std::expected<void, std::string> validate() const
@@ -83,7 +85,8 @@ inline app_config parse_arguments(int argc, char** argv)
     for (int i = 1; i < argc; ++i)
     {
         const std::string_view option{argv[i]};
-        if (option != "--endpoint" && option != "--max-message-size" && option != "--symbols" && option != "--channels")
+        if (option != "--endpoint" && option != "--max-message-size" && option != "--symbols" &&
+            option != "--channels" && option != "--exit-after-sec")
             throw std::invalid_argument("Unknown option: " + std::string(option));
         if (++i == argc)
             throw std::invalid_argument("Missing value for " + std::string(option));
@@ -94,6 +97,16 @@ inline app_config parse_arguments(int argc, char** argv)
             config.symbols = split_list(value);
         else if (option == "--channels")
             config.channels = split_list(value);
+        else if (option == "--exit-after-sec")
+        {
+            const std::string_view seconds_text{argv[i]};
+            unsigned seconds{};
+            const auto [end, error] =
+                std::from_chars(seconds_text.data(), seconds_text.data() + seconds_text.size(), seconds);
+            if (error != std::errc{} || end != seconds_text.data() + seconds_text.size())
+                throw std::invalid_argument("--exit-after-sec must be an unsigned number of seconds (0 is allowed)");
+            config.exit_after_sec = seconds;
+        }
         else
         {
             const auto [end, error] =

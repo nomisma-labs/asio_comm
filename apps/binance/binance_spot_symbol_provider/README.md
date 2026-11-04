@@ -55,7 +55,10 @@ does not bound total process memory.
 
 ## Assembly and validation
 
-`asio_service` supplies the shared `io_context` and completion result. `binance_spot_client`
+The shared I/O node and service commands are defined in [common_app_nodes.h](../../common_app_nodes.h).
+
+`asio_service` supplies the shared `io_context`; `symbol_output` owns the completion result.
+`binance_spot_client`
 adapts WebSocket callbacks into `nom::event::symbol_information`; `symbol_output` writes the
 response. `app` starts the request through `nom::relay` and runs the context until callbacks drain.
 Relay delivery is synchronous on that thread. Event source/payload views are borrowed only for

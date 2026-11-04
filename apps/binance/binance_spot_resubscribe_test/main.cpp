@@ -1,15 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Alexey Tkachenko
 // SPDX-License-Identifier: LicenseRef-Nomisma-Labs-Proprietary
 
-// GCC 16's Ubuntu snapshot needs stdio declarations before module imports at -O2.
-#if defined(__GNUC__) && !defined(__clang__) && __GNUC__ == 16
-#include <cstdio>
-#endif
-
-#include <spd_logger/logging.h>
-
-#include <boost/asio/any_io_executor.hpp>
-#include <boost/asio/io_context.hpp>
+#include "../../common_app_nodes.h"
 
 import std;
 import nom.asio_comm;
@@ -20,12 +12,6 @@ import nom.spd_logger;
 
 namespace nom::event
 {
-    enum class service_command
-    {
-        start,
-        stop
-    };
-
     // Borrowed views are consumed synchronously by the relay before the WebSocket callback returns.
     struct market_data
     {
@@ -71,15 +57,6 @@ std::string resubscription_request(const app_config& config)
     next.symbols = config.resubscribe_symbols;
     return subscription_request(next, 2);
 }
-
-template <typename Traits> struct asio_service
-{
-    struct context_mixin
-    {
-        // The assembly constructs context services before nodes and destroys them after nodes.
-        boost::asio::io_context io;
-    };
-};
 
 template <typename Traits> struct market_data_logger
 {

@@ -1,15 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Alexey Tkachenko
 // SPDX-License-Identifier: LicenseRef-Nomisma-Labs-Proprietary
 
-// GCC 16's Ubuntu snapshot needs stdio declarations before module imports at -O2.
-#if defined(__GNUC__) && !defined(__clang__) && __GNUC__ == 16
-#include <cstdio>
-#endif
-
-#include <spd_logger/logging.h>
-
-#include <boost/asio/any_io_executor.hpp>
-#include <boost/asio/io_context.hpp>
+#include "../../common_app_nodes.h"
 
 import std;
 import nom.asio_comm;
@@ -20,12 +12,6 @@ import nom.spd_logger;
 
 namespace nom::event
 {
-    enum class service_command
-    {
-        start,
-        stop
-    };
-
     // Borrowed views are consumed synchronously by the relay before the WebSocket callback returns.
     struct market_data
     {
@@ -78,15 +64,6 @@ std::vector<std::string> subscription_requests(const app_config& config)
     return requests;
 }
 
-template <typename Traits> struct asio_service
-{
-    struct context_mixin
-    {
-        // The assembly constructs context services before nodes and destroys them after nodes.
-        boost::asio::io_context io;
-    };
-};
-
 template <typename Traits> struct market_data_logger
 {
     void on_response(const nom::event::market_data& event)
@@ -132,13 +109,17 @@ public:
         // Connect -> subscribe for each channel -> {"jsonrpc":"2.0","id":N,"result":true} or error
         // -> channelMessage notifications. send() is local completion; this logger does not check RPC acks.
         LINFO("Connected: {}", connection.session_id());
+        nom::relay<Traits>::pass_response(this, nom::event::feed_event::connected);
+        // A response handler may close the connection before subscription.
+        if (!connection.is_connected())
+            return;
         for (const auto& request : requests_)
         {
             LINFO("Subscribing: {}", request);
             if (!connection.send(request))
             {
                 LERROR("Subscription send failed");
-                on_request(nom::event::service_command::stop);
+                nom::relay<Traits>::pass_response(this, nom::event::feed_event::failed);
                 return;
             }
         }
@@ -166,13 +147,13 @@ public:
         // reconnects must resubscribe and restore its book before using incremental data again.
         // https://bf-lightning-api.readme.io/docs/realtime-api
         LWARN("Disconnected: {}", event.reason);
-        on_request(nom::event::service_command::stop);
+        nom::relay<Traits>::pass_response(this, nom::event::feed_event::failed);
     }
 
     void operator()(nom::web_socket&, const nom::event::network_error& event)
     {
         LERROR("{}: {}", event.description, event.message);
-        on_request(nom::event::service_command::stop);
+        nom::relay<Traits>::pass_response(this, nom::event::feed_event::failed);
     }
 
 private:
@@ -180,8 +161,9 @@ private:
     nom::web_socket client_;
 };
 
+// Keep the terminator before every other stop handler: pass_request only visits later nodes.
 struct bitflyer_spot_assembly
-    : nom::assembly<bitflyer_spot_assembly, asio_service, market_data_logger, bitflyer_spot_client>
+    : nom::assembly<bitflyer_spot_assembly, asio_service, app_terminator, market_data_logger, bitflyer_spot_client>
 {
 };
 
@@ -191,11 +173,12 @@ struct app : nom::relay<bitflyer_spot_assembly>
     {
     }
 
-    void start()
+    int start()
     {
         request(nom::event::service_command::start);
-        // Relay calls and all WebSocket callbacks stay on this one io_context thread.
+        // Drain canceled handlers before destroying the nodes; do not stop the context early.
         ctx().io.run();
+        return ctx().exit_code.value_or(1);
     }
 };
 
@@ -207,6 +190,9 @@ int main(int argc, char** argv)
                      "                           [--channels ticker,trade,depth] [--endpoint wss://HOST/ws]\n"
                      "Defaults: BTC_JPY, all three channels, wss://ws.lightstream.bitflyer.com/json-rpc.\n"
                      "Log all incoming messages until disconnected or stopped with Ctrl+C.\n";
+        std::cout << "Optional: --exit-after-sec SECONDS (default: no limit).\n"
+                     "0 exits after connection before subscribing; positive values count from connection.\n"
+                     "Ctrl+C/SIGTERM and timeout exit successfully; failures exit with status 1.\n";
         return 0;
     }
 
@@ -219,9 +205,9 @@ int main(int argc, char** argv)
             return 1;
         }
         nom::init_logger(nom::main_logger, config.log);
-        app(config).start();
+        const auto result = app(config).start();
         nom::flush_logger(nom::main_logger);
-        return 1; // An ended connection interrupts this continuous feed.
+        return result;
     }
     catch (const std::exception& error)
     {

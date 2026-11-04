@@ -1,12 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Alexey Tkachenko
 // SPDX-License-Identifier: LicenseRef-Nomisma-Labs-Proprietary
 
-#if defined(__GNUC__) && !defined(__clang__) && __GNUC__ == 16
-#include <cstdio>
-#endif
-
-#include <boost/asio/any_io_executor.hpp>
-#include <boost/asio/io_context.hpp>
+#include "../common_app_nodes.h"
 
 import std;
 import nom.asio_comm;
@@ -17,21 +12,6 @@ import nom.spd_logger;
 
 namespace example
 {
-    enum class command
-    {
-        start,
-        stop
-    };
-
-    template <typename Traits> struct asio_service
-    {
-        struct context_mixin
-        {
-            boost::asio::io_context io;
-            bool success{};
-        };
-    };
-
     template <typename Traits> struct tick_output
     {
         void on_response()
@@ -43,19 +23,24 @@ namespace example
     template <typename Traits> class timer_source
     {
     public:
+        struct context_mixin
+        {
+            bool success{};
+        };
+
         explicit timer_source(const app_config& config)
             : timer_(nom::ctx(this).io.get_executor()), delay_(config.delay_ms), remaining_(config.ticks)
         {
         }
 
-        void on_request(command action)
+        void on_request(nom::event::service_command action)
         {
             switch (action)
             {
-            case command::start:
+            case nom::event::service_command::start:
                 arm();
                 break;
-            case command::stop:
+            case nom::event::service_command::stop:
                 timer_.cancel();
                 break;
             }
@@ -91,7 +76,7 @@ namespace example
         }
         int run()
         {
-            request(command::start);
+            request(nom::event::service_command::start);
             ctx().io.run();
             return ctx().success ? 0 : 1;
         }

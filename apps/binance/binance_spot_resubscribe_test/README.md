@@ -50,7 +50,8 @@ server acceptance and continued reads. These request/reply conventions follow th
 This is a continuous diagnostic tool: it keeps logging after the additional subscription until
 interrupted or disconnected. Connection failures and disconnects exit with status 1; the tool
 does not turn log inspection into an automatic pass verdict. There is no reconnect or application
-deadline. `asio_service` owns the shared context, `resubscribe_client` owns the connection and
+deadline. The I/O node and service commands come from [common_app_nodes.h](../../common_app_nodes.h).
+`asio_service` owns the shared context, `resubscribe_client` owns the connection and
 counter, and `app` starts and runs the relay.
 
 ## Automated validation

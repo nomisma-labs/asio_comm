@@ -44,7 +44,10 @@ normalization or instrument filtering. Requests ask for `Accept-Encoding: identi
 Redirects, compressed responses and authentication are not handled by this example.
 
 [config.h](config.h) owns defaults, argument parsing and nonthrowing `app_config::validate()`.
-In [main.cpp](main.cpp), `asio_service` owns the I/O context/signals, `htx_spot_client`
+The shared I/O node and service commands are defined in [common_app_nodes.h](../../common_app_nodes.h).
+
+In [main.cpp](main.cpp), `provider_state` extends the shared I/O context with signals and the completion result.
+`htx_spot_client`
 owns HTTPS and its callbacks, and `symbol_output` consumes borrowed data synchronously through
 the relay. HTTPS owns connection/request deadlines; SIGINT/SIGTERM close the request silently.
 Success exits 0 only after the catalog is written; errors, cancellation and output failure exit 1.

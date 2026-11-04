@@ -1,15 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Alexey Tkachenko
 // SPDX-License-Identifier: LicenseRef-Nomisma-Labs-Proprietary
 
-#if defined(__GNUC__) && !defined(__clang__) && __GNUC__ == 16
-#include <cstdio>
-#endif
-
-#include <boost/asio/any_io_executor.hpp>
-#include <boost/asio/io_context.hpp>
-#include <boost/asio/signal_set.hpp>
-#include <boost/system/error_code.hpp>
-#include <csignal>
+#include "../../common_app_nodes.h"
 
 import std;
 import nom.asio_comm;
@@ -20,12 +12,6 @@ import nom.spd_logger;
 
 namespace nom::event
 {
-    enum class service_command
-    {
-        start,
-        stop
-    };
-
     // The borrowed response is consumed synchronously by the relay.
     struct symbol_information
     {
@@ -84,12 +70,11 @@ bool is_catalog(std::string_view data)
     return response_field(data, "code") == R"("0")" && response_field(data, "data").starts_with('[');
 }
 
-template <typename Traits> struct asio_service
+template <typename Traits> struct provider_state
 {
-    struct context_mixin
+    struct context_mixin : asio_service<Traits>::context_mixin
     {
-        boost::asio::io_context io;
-        boost::asio::signal_set signals{io, SIGINT, SIGTERM};
+        boost::asio::signal_set signals{this->io, SIGINT, SIGTERM};
         bool success{};
     };
 };
@@ -185,7 +170,7 @@ private:
     nom::https client_;
 };
 
-struct okx_spot_assembly : nom::assembly<okx_spot_assembly, asio_service, symbol_output, okx_spot_client>
+struct okx_spot_assembly : nom::assembly<okx_spot_assembly, provider_state, symbol_output, okx_spot_client>
 {
 };
 

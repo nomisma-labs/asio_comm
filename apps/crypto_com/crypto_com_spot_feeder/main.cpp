@@ -1,17 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Alexey Tkachenko
 // SPDX-License-Identifier: LicenseRef-Nomisma-Labs-Proprietary
 
-// GCC 16's Ubuntu snapshot needs stdio declarations before module imports at -O2.
-#if defined(__GNUC__) && !defined(__clang__) && __GNUC__ == 16
-#include <cstdio>
-#endif
-
-#include <boost/asio/any_io_executor.hpp>
-#include <boost/asio/io_context.hpp>
-#include <boost/asio/signal_set.hpp>
-#include <boost/system/error_code.hpp>
-#include <csignal>
-#include <spd_logger/logging.h>
+#include "../../common_app_nodes.h"
 
 import std;
 import nom.asio_comm;
@@ -22,12 +12,6 @@ import nom.spd_logger;
 
 namespace nom::event
 {
-    enum class service_command
-    {
-        start,
-        stop
-    };
-
     // Borrowed views are consumed synchronously before the WebSocket callback returns.
     struct market_data
     {
@@ -134,16 +118,6 @@ std::string heartbeat_reply(std::string_view data)
                : "";
 }
 
-template <typename Traits> struct asio_service
-{
-    struct context_mixin
-    {
-        // Context services outlive the assembly's nodes and their asynchronous operations.
-        boost::asio::io_context io;
-        boost::asio::signal_set signals{io, SIGINT, SIGTERM};
-    };
-};
-
 template <typename Traits> struct market_data_logger
 {
     void on_response(const nom::event::market_data& event)
@@ -174,14 +148,18 @@ public:
             break;
         case nom::event::service_command::stop:
             subscribe_timer_.cancel();
-            nom::ctx(this).signals.cancel();
             client_.close();
             break;
         }
     }
 
-    void operator()(nom::web_socket&, const nom::event::on_connected&)
+    void operator()(nom::web_socket& connection, const nom::event::on_connected&)
     {
+        LINFO("Connected: {}", connection.session_id());
+        nom::relay<Traits>::pass_response(this, nom::event::feed_event::connected);
+        // A response handler may close the connection before subscription.
+        if (!connection.is_connected())
+            return;
         // One connection: subscribe -> acknowledgements/errors -> continuous updates.
         // send() confirms the local write only; responses are handled in the data callback.
         // The market API asks clients to wait one second before the first subscription.
@@ -200,7 +178,7 @@ public:
         if (has_api_error(data))
         {
             LERROR("API error: {}", data);
-            on_request(nom::event::service_command::stop);
+            nom::relay<Traits>::pass_response(this, nom::event::feed_event::failed);
             return;
         }
         nom::relay<Traits>::pass_response(
@@ -210,13 +188,13 @@ public:
     void operator()(nom::web_socket&, const nom::event::on_disconnected& event)
     {
         LWARN("Disconnected: {}", event.reason);
-        on_request(nom::event::service_command::stop);
+        nom::relay<Traits>::pass_response(this, nom::event::feed_event::failed);
     }
 
     void operator()(nom::web_socket&, const nom::event::network_error& event)
     {
         LERROR("{}: {}", event.description, event.message);
-        on_request(nom::event::service_command::stop);
+        nom::relay<Traits>::pass_response(this, nom::event::feed_event::failed);
     }
 
 private:
@@ -225,7 +203,7 @@ private:
         if (client_.send(message))
             return true;
         LERROR("Send failed");
-        on_request(nom::event::service_command::stop);
+        nom::relay<Traits>::pass_response(this, nom::event::feed_event::failed);
         return false;
     }
 
@@ -241,8 +219,9 @@ private:
     nom::timer subscribe_timer_;
 };
 
+// Keep the terminator before every other stop handler: pass_request only visits later nodes.
 struct crypto_com_spot_assembly
-    : nom::assembly<crypto_com_spot_assembly, asio_service, market_data_logger, crypto_com_spot_client>
+    : nom::assembly<crypto_com_spot_assembly, asio_service, app_terminator, market_data_logger, crypto_com_spot_client>
 {
 };
 
@@ -254,16 +233,10 @@ struct app : nom::relay<crypto_com_spot_assembly>
 
     int start()
     {
-        ctx().signals.async_wait(
-            [this](const boost::system::error_code& error, int)
-            {
-                if (!error)
-                    request(nom::event::service_command::stop);
-            });
         request(nom::event::service_command::start);
-        // Relay delivery and callbacks share one thread. Drain canceled handlers before node destruction.
+        // Drain canceled handlers before destroying the nodes; do not stop the context early.
         ctx().io.run();
-        return 1; // An ended connection interrupts this continuous feed.
+        return ctx().exit_code.value_or(1);
     }
 };
 
@@ -275,6 +248,9 @@ int main(int argc, char** argv)
                      " [--symbols SYMBOL,...] [--channels ticker,trade,depth]"
                      "\nDefault endpoint: "
                   << app_config{}.endpoint << '\n';
+        std::cout << "Optional: --exit-after-sec SECONDS (default: no limit).\n"
+                     "0 exits after connection before subscribing; positive values count from connection.\n"
+                     "Ctrl+C/SIGTERM and timeout exit successfully; failures exit with status 1.\n";
         return 0;
     }
     try
