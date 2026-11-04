@@ -8,8 +8,6 @@
 
 #include <boost/asio/any_io_executor.hpp>
 #include <boost/asio/io_context.hpp>
-#include <boost/asio/steady_timer.hpp>
-#include <boost/system/error_code.hpp>
 
 import std;
 import nom.asio_comm;
@@ -26,7 +24,7 @@ int main(int argc, char** argv)
         boost::asio::io_context io;
         const nom::url address(argv[1]);
         nom::web_socket client(io.get_executor(), address.host(), address.port(), address.target());
-        boost::asio::steady_timer deadline(io);
+        nom::timer deadline(io.get_executor());
         bool accepted = false;
         unsigned connected = 0;
         unsigned network_errors = 0;
@@ -38,7 +36,7 @@ int main(int argc, char** argv)
             client.close();
             deadline.cancel();
         };
-        const nom::web_socket::delegate callbacks{
+        const nom::web_socket::ws_delegate callbacks{
             [&](nom::web_socket&, const auto& event)
             {
                 using event_type = std::remove_cvref_t<decltype(event)>;
@@ -84,16 +82,12 @@ int main(int argc, char** argv)
             data_updates = 0;
             expected_failure = false;
             expected_description = "Connect/Handshake error";
-            deadline.expires_after(std::chrono::seconds(5));
-            deadline.async_wait(
-                [&](const boost::system::error_code& error)
-                {
-                    if (!error)
-                    {
-                        std::cerr << "Timed out waiting for header validation\n";
-                        finish();
-                    }
-                });
+            deadline.arm_after(std::chrono::seconds(5),
+                               [&]
+                               {
+                                   std::cerr << "Timed out waiting for header validation\n";
+                                   finish();
+                               });
 
             auto params = client.params();
             if (attempt == 0)
@@ -108,11 +102,12 @@ int main(int argc, char** argv)
                                   {.name = "User-Agent", .value = "headers-test/1"}};
                 params.agent_name = "overridden-by-header";
                 client.update_params(params);
-                client.connect(nom::web_socket::delegate{[&](nom::web_socket&, const auto&)
-                                                         {
-                                                             std::cerr << "Callback replacement did not take effect\n";
-                                                             finish();
-                                                         }});
+                client.connect(nom::web_socket::ws_delegate{[&](nom::web_socket&, const auto&)
+                                                            {
+                                                                std::cerr
+                                                                    << "Callback replacement did not take effect\n";
+                                                                finish();
+                                                            }});
                 client.update_delegate(callbacks);
             }
             else if (attempt == 1)
@@ -121,21 +116,20 @@ int main(int argc, char** argv)
                                   {.name = "X-Attempt", .value = "second"}};
                 params.agent_name = "headers-test/2";
                 client.update_params(params);
-                client.connect(client.callbacks());
+                client.connect(client.delegate());
             }
             else if (attempt == 2)
             {
                 // Headers and agent persist; the peer also checks repeated configured outbound pings.
                 params.active_ping = nom::ws_params::client_ping_probe{};
                 params.active_ping->ping_period_sec = 1;
-                params.receive_watchdog = nom::ws_params::receive_data_watchdog{.timeout_sec = 2};
                 client.update_params(params);
-                client.connect(client.callbacks());
+                client.connect(client.delegate());
             }
             else
             {
                 client.update_params({}); // Explicitly restore defaults, including empty headers.
-                client.connect(client.callbacks());
+                client.connect(client.delegate());
             }
 
             const auto configured_agent = client.params().agent_name;

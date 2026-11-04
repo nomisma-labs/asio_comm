@@ -129,7 +129,7 @@ public:
         switch (command)
         {
         case nom::event::service_command::start:
-            client_.connect(nom::web_socket::delegate{std::ref(*this)});
+            client_.connect(nom::web_socket::ws_delegate{std::ref(*this)});
             break;
         case nom::event::service_command::stop:
             nom::ctx(this).signals.cancel();

@@ -2,15 +2,18 @@
 
 <!-- repo-description:begin -->
 `asio_comm` will provide C++ implementations of WebSocket, HTTP and other communication
-protocols, initially for connectivity to cryptocurrency exchanges. The repository contains an
-initial TLS WebSocket client, public exchange market-data feeders, WebSocket symbol providers, and
-WebSocket and logging/relay examples.
+protocols, initially for connectivity to cryptocurrency exchanges. The repository contains
+TLS WebSocket and asynchronous HTTPS clients, a generation-safe timer, public exchange market-data
+feeders, WebSocket symbol providers, and communication/timer/logging examples.
 <!-- repo-description:end -->
 
 ## Components
 
 - [WebSocket](docs/asio_comm/web_socket.md): TLS client, state machine, events and usage constraints.
-  The library target is `nom::asio_comm`; its C++ module is `nom.asio_comm`.
+- [HTTPS](docs/asio_comm/https.md): asynchronous HTTP/1.1 requests, bounded queuing and deadlines.
+- [Timer](docs/asio_comm/timer.md): one-shot scheduling with generation-safe cancellation.
+
+The library target is `nom::asio_comm`; its C++ module is `nom.asio_comm`.
 
 ## Example applications
 
@@ -36,7 +39,7 @@ The repositories under `external/` are pinned Git submodules and are loaded thro
 `spd_logger` provides synchronous logging, and `assembly` provides
 application composition and event routing.
 
-The WebSocket client also uses Boost.Asio/Beast and OpenSSL. Install the OpenSSL development
+The communication clients also use Boost.Asio/Beast and OpenSSL. Install the OpenSSL development
 package and a system CA certificate bundle; the loopback integration test also uses the
 `openssl` command-line tool and Python's standard library. The HTX feeder additionally needs the
 zlib development package to handle compressed application heartbeats.

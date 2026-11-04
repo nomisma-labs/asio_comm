@@ -144,7 +144,6 @@ public:
         auto params = client_.params();
         params.max_message_size = config.max_message_size;
         params.active_ping = nom::ws_params::client_ping_probe{};
-        params.receive_watchdog = nom::ws_params::receive_data_watchdog{};
         client_.update_params(params);
     }
 
@@ -153,7 +152,7 @@ public:
         switch (command)
         {
         case nom::event::service_command::start:
-            client_.connect(nom::web_socket::delegate{std::ref(*this)});
+            client_.connect(nom::web_socket::ws_delegate{std::ref(*this)});
             break;
         case nom::event::service_command::stop:
             nom::ctx(this).signals.cancel();

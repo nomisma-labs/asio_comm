@@ -51,8 +51,8 @@ lists aggregate trades but does not list this raw trade stream. Live behavior an
 API coverage are distinct evidence; this example subscribes to `trade` without substituting
 `aggTrade`.
 
-The WebSocket client answers server pings while reading. Outbound control pings are enabled
-so received pongs keep the client's idle timer active on quiet subscriptions.
+The WebSocket client answers server pings while reading. Outbound control pings check
+connection availability independently of market-data activity. Data freshness belongs to the subscriber.
 
 Every payload is logged unchanged, including subscription acknowledgements and API errors.
 The app does not parse messages, reconcile snapshots, reconstruct an order book, or subscribe

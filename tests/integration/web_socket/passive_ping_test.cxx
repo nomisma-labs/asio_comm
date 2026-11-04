@@ -7,8 +7,6 @@
 
 #include <boost/asio/any_io_executor.hpp>
 #include <boost/asio/io_context.hpp>
-#include <boost/asio/steady_timer.hpp>
-#include <boost/system/error_code.hpp>
 
 import std;
 import nom.asio_comm;
@@ -24,7 +22,7 @@ int main(int argc, char** argv)
         const std::string_view mode(argv[2]);
         const bool expect_timeout = mode == "silent" || mode == "traffic" || mode == "refresh" || mode == "reconnect" ||
                                     mode == "move" || mode == "slow_handler";
-        const bool expect_peer_close = mode == "peer_close" || mode == "read_error" || mode == "graceful";
+        const bool expect_peer_close = mode == "peer_close" || mode == "read_error";
         if (!expect_timeout && !expect_peer_close && mode != "disabled" && mode != "close_connected" &&
             mode != "close_after_ping" && mode != "late_handshake")
             return 1;
@@ -38,15 +36,12 @@ int main(int argc, char** argv)
         if (mode == "traffic")
         {
             params.active_ping = nom::ws_params::client_ping_probe{.ping_period_sec = 1, .pong_timeout_sec = 1};
-            params.receive_watchdog = nom::ws_params::receive_data_watchdog{.timeout_sec = 4};
         }
-        if (mode == "graceful")
-            params.receive_watchdog = nom::ws_params::receive_data_watchdog{.timeout_sec = 1};
         client.update_params(params);
 
         std::optional<nom::web_socket> moved;
         nom::web_socket* owner = &client;
-        boost::asio::steady_timer deadline(io);
+        nom::timer deadline(io.get_executor());
         nom::network_timestamp connected_at{};
         unsigned connected = 0;
         unsigned disconnected = 0;
@@ -64,8 +59,8 @@ int main(int argc, char** argv)
             failed = true;
             stop();
         };
-        nom::web_socket::delegate callbacks;
-        callbacks = nom::web_socket::delegate{
+        nom::web_socket::ws_delegate callbacks;
+        callbacks = nom::web_socket::ws_delegate{
             [&](nom::web_socket& connection, const auto& event)
             {
                 if (&connection != owner)
@@ -140,13 +135,7 @@ int main(int argc, char** argv)
                 else if constexpr (std::same_as<event_type, nom::event::network_error>)
                     fail(event.description);
             }};
-        deadline.expires_after(std::chrono::seconds(8));
-        deadline.async_wait(
-            [&](const boost::system::error_code& error)
-            {
-                if (!error)
-                    fail("Passive Ping test did not finish");
-            });
+        deadline.arm_after(std::chrono::seconds(8), [&] { fail("Passive Ping test did not finish"); });
         client.connect(callbacks);
         io.run();
         const unsigned expected_connected = mode == "reconnect" ? 2u : 1u;

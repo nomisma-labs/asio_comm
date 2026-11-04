@@ -76,7 +76,6 @@ def run_case(client, context, certificate, options, requests, messages, keepaliv
         assert result.returncode == 1 and 'Disconnected:' in output, output
         for message in messages + (['pong'] if keepalive == 'text' else []):
             assert message + '\n' in output, f'missing logged payload {message}: {output}'
-        assert 'Receive watchdog timer expired' not in output, output
 
 
 def subscriptions(exchange, symbols, channels):

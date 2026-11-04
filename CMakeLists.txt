@@ -31,6 +31,7 @@ FetchContent_MakeAvailable(assembly)
 
 # Boost comes from system packages (docs/kit/build.md#dependencies).
 nom_find_boost()
+find_package(Boost 1.90 CONFIG REQUIRED COMPONENTS url)
 find_package(OpenSSL REQUIRED)
 find_package(Threads REQUIRED)
 

@@ -7,72 +7,23 @@ module;
 
 #include <boost/asio/ts/netfwd.hpp>
 
-export module nom.asio_comm;
+export module nom.asio_comm:web_socket;
 
 import std;
+export import :events;
 export import :ws_params;
 export import nom.url;
 export import nom.assembly;
 
 export namespace nom
 {
-    class web_socket;
-}
-
-namespace nom
-{
-    namespace detail
-    {
-        template <typename... Events> struct ws_delegate
-        {
-            using type = delegate<std::function<void(web_socket& ws, Events)>...>;
-        };
-    } // namespace detail
-} // namespace nom
-
-export namespace nom
-{
-    using network_timestamp = std::chrono::steady_clock::time_point;
-
-    namespace event
-    {
-        struct on_connected
-        {
-            network_timestamp ts{};
-        };
-
-        struct on_disconnected
-        {
-            network_timestamp ts{};
-            std::string reason;
-        };
-
-        struct ws_data
-        {
-            network_timestamp ts{};
-            std::span<const char> data;
-
-            std::string_view sv_data() const noexcept
-            {
-                return {data.data(), data.size()};
-            }
-        };
-
-        struct network_error
-        {
-            network_timestamp ts{};
-            std::string description;
-            std::string message;
-        };
-    } // namespace event
-
     NOM_ENUM(ws_status, std::uint8_t, init, connecting, connected, disconnecting, conn_failed, disconnected)
 
     // Detection paths are implemented; live/network-fault reproductions remain pending.
     // DEV-DONE/LIVE-TEST-PENDING TODO[WS-CABLE-LOSS] (stage WS-06):
     // Reproduce hard disconnection (unplug the network cable).
     // DEV-DONE/LIVE-TEST-PENDING TODO[WS-INTERFACE-LOSS] (stage WS-06): Reproduce Docker-based interface disconnection
-    // (a soft disconnection of a virtual interface may only be caught by the receive watchdog timer).
+    // (silent loss requires a control-Ping policy or subscriber data-freshness timeout).
     // DEV-DONE/LIVE-TEST-PENDING TODO[WS-PEER-CLOSE] (stage WS-06): Reproduce normal server disconnection
     // (e.g. Binance resets the MD connection once per day).
     // TODO[WS-EXCEPTIONS] (stage WS-08): Consider making the interface noexcept for everything
@@ -84,10 +35,10 @@ export namespace nom
         struct session;
 
     public:
-        using delegate = ::nom::detail::ws_delegate<const event::ws_data&,
-                                                    const event::on_connected&,
-                                                    const event::on_disconnected&,
-                                                    const event::network_error&>::type;
+        using ws_delegate = ::nom::delegate<std::function<void(web_socket& ws, const event::ws_data&)>,
+                                            std::function<void(web_socket& ws, const event::on_connected&)>,
+                                            std::function<void(web_socket& ws, const event::on_disconnected&)>,
+                                            std::function<void(web_socket& ws, const event::network_error&)>>;
 
         web_socket(boost::asio::any_io_executor executor, const ::nom::url& address);
         web_socket(boost::asio::any_io_executor executor,
@@ -107,8 +58,8 @@ export namespace nom
             return ws_status::connected == status();
         }
 
-        void update_delegate(const delegate& callbacks);
-        [[nodiscard]] const delegate& callbacks() const noexcept;
+        void update_delegate(const ws_delegate& delegate);
+        [[nodiscard]] const ws_delegate& delegate() const noexcept;
 
         void update_params(const ws_params& params);
         [[nodiscard]] const ws_params& params() const noexcept
@@ -116,7 +67,7 @@ export namespace nom
             return params_;
         }
 
-        void connect(const delegate& callbacks);
+        void connect(const ws_delegate& delegate);
         void close() noexcept;
         [[nodiscard]] bool send(const std::string& text);
 

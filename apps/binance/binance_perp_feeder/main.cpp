@@ -88,12 +88,11 @@ public:
     explicit binance_perp_client(const app_config& config)
         : request_(subscription_request(config)), client_(nom::ctx(this).io.get_executor(), nom::url(config.endpoint))
     {
-        // Our client probes solicit Pongs for its receive-idle monitor on quiet subscriptions.
+        // Client control probes check connection availability even when market data is quiet.
         // This is an example policy, separate from Binance's server Ping every 3 min / 10 min Pong
         // allowance (see Connect above). Beast still answers server Pings automatically while reading.
         auto params = client_.params();
         params.active_ping = nom::ws_params::client_ping_probe{};
-        params.receive_watchdog = nom::ws_params::receive_data_watchdog{};
         client_.update_params(params);
     }
 
@@ -106,7 +105,7 @@ public:
             std::ostringstream address;
             address << client_.url();
             LINFO("Connecting to {}", address.str());
-            client_.connect(nom::web_socket::delegate{std::ref(*this)});
+            client_.connect(nom::web_socket::ws_delegate{std::ref(*this)});
             break;
         }
         case nom::event::service_command::stop:

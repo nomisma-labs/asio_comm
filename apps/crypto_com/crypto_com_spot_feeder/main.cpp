@@ -9,7 +9,6 @@
 #include <boost/asio/any_io_executor.hpp>
 #include <boost/asio/io_context.hpp>
 #include <boost/asio/signal_set.hpp>
-#include <boost/asio/steady_timer.hpp>
 #include <boost/system/error_code.hpp>
 #include <csignal>
 #include <spd_logger/logging.h>
@@ -158,11 +157,11 @@ template <typename Traits> class crypto_com_spot_client
 public:
     explicit crypto_com_spot_client(const app_config& config)
         : requests_(subscription_requests(config)),
-          client_(nom::ctx(this).io.get_executor(), nom::url(config.endpoint)), subscribe_timer_(nom::ctx(this).io)
+          client_(nom::ctx(this).io.get_executor(), nom::url(config.endpoint)),
+          subscribe_timer_(nom::ctx(this).io.get_executor())
     {
         auto params = client_.params();
         params.max_message_size = config.max_message_size;
-        params.receive_watchdog = nom::ws_params::receive_data_watchdog{};
         client_.update_params(params);
     }
 
@@ -171,7 +170,7 @@ public:
         switch (command)
         {
         case nom::event::service_command::start:
-            client_.connect(nom::web_socket::delegate{std::ref(*this)});
+            client_.connect(nom::web_socket::ws_delegate{std::ref(*this)});
             break;
         case nom::event::service_command::stop:
             subscribe_timer_.cancel();
@@ -186,13 +185,7 @@ public:
         // One connection: subscribe -> acknowledgements/errors -> continuous updates.
         // send() confirms the local write only; responses are handled in the data callback.
         // The market API asks clients to wait one second before the first subscription.
-        subscribe_timer_.expires_after(std::chrono::milliseconds(1000));
-        subscribe_timer_.async_wait(
-            [this](const boost::system::error_code& error)
-            {
-                if (!error)
-                    subscribe();
-            });
+        subscribe_timer_.arm_after(std::chrono::milliseconds(1000), [this] { subscribe(); });
     }
 
     void operator()(nom::web_socket& connection, const nom::event::ws_data& event)
@@ -245,7 +238,7 @@ private:
 
     std::vector<std::string> requests_;
     nom::web_socket client_;
-    boost::asio::steady_timer subscribe_timer_;
+    nom::timer subscribe_timer_;
 };
 
 struct crypto_com_spot_assembly

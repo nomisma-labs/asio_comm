@@ -17,11 +17,11 @@ cmake --build --preset dev --target binance_spot_feeder binance_spot_symbol_prov
 The tables track the target exchange coverage. App links identify implemented examples; skipped symbol
 providers include the reason and API reference. Unverified hosting cells remain explicit. Existing market subdivisions remain separate.
 
-All feeders enable `receive_watchdog` with its default timeout of 30 seconds. Symbol providers
-and other examples leave it disabled (`std::nullopt`). The watchdog counts complete data messages,
-excluding control Pings/Pongs. Application heartbeats still count as data; useful market-data monitoring
-requires exchange-specific classification (see
-[WebSocket timer behavior](../core/asio_comm/ping_work.md)).
+Data-freshness monitoring belongs to each subscriber. Application heartbeats and acknowledgements
+arrive as ordinary WebSocket messages, so only the subscriber can decide which messages refresh
+its data deadline. The examples do not currently implement a subscriber freshness timer; use
+[`nom::timer`](../docs/asio_comm/timer.md) for that policy. Control-Ping monitoring remains a
+separate [WebSocket connection policy](../docs/asio_comm/web_socket_ping.md).
 
 ## Market-data feeders
 
@@ -30,6 +30,9 @@ only message type and size. Basic string checks identify API errors and heartbea
 construct a market-data model, reconstruct order books,
 or automatically reconnect. App names link to their build instructions, configuration and workflows;
 source comments explain subscription limits and API decisions.
+
+Application heartbeat and subscription-pacing waits use [`nom::timer`](../docs/asio_comm/timer.md).
+Cancellation suppresses pending callbacks, including expiries already queued for delivery.
 
 Frequencies below describe exchange publication intervals, not guaranteed delivery latency.
 Event-driven streams can be silent when nothing changes. Locations concern serving infrastructure,
@@ -142,4 +145,6 @@ one point in time; they do not establish lossless capture or sequence reconcilia
   then add symbols directly from the Nth market-data callback on the same connection.
 - [web_socket_example](web_socket_example/README.md): connect, optionally send a message, print the
   first reply and close; includes client parameter examples.
+- [https_example](https_example/README.md): verified TLS, GET responses and request submission from response callbacks.
+- [timer_example](timer_example/README.md): one-shot timer rearming and expiry delivery through Assembly/relay.
 - [asio_comm_example](asio_comm_example/README.md): configure logging and run a local Assembly/relay workflow.

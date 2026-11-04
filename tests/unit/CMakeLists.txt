@@ -4,3 +4,6 @@
 # One subdirectory per Catch2 unit test suite (docs/kit/howto.md#a-unit-test-suite).
 
 add_subdirectory(web_socket)
+
+add_subdirectory(timer)
+add_subdirectory(https)

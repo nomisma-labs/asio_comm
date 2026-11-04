@@ -43,36 +43,32 @@ int main(int argc, char** argv)
         int result = 1;
 
         // One io_context thread serializes the client and its callbacks.
-        client.connect(nom::web_socket::delegate{
-            [&](nom::web_socket& connection, const auto& event)
+        client.connect(nom::web_socket::ws_delegate(
+            [&](nom::web_socket&, const nom::event::ws_data& event)
             {
-                using event_type = std::remove_cvref_t<decltype(event)>;
-                if constexpr (std::same_as<event_type, nom::event::on_connected>)
+                std::cout << "Received: " << event.sv_data() << '\n';
+                result = 0;
+                client.close();
+            },
+            [&](nom::web_socket& connection, const nom::event::on_connected&)
+            {
+                std::cout << "Connected: " << connection.session_id() << '\n';
+                if (config.message && !connection.send(*config.message))
                 {
-                    std::cout << "Connected: " << connection.session_id() << '\n';
-                    if (config.message && !connection.send(*config.message))
-                    {
-                        std::cerr << "Send failed\n";
-                        client.close();
-                    }
-                }
-                else if constexpr (std::same_as<event_type, nom::event::ws_data>)
-                {
-                    std::cout << "Received: " << event.sv_data() << '\n';
-                    result = 0;
+                    std::cerr << "Send failed\n";
                     client.close();
                 }
-                else if constexpr (std::same_as<event_type, nom::event::on_disconnected>)
-                {
-                    std::cerr << "Disconnected before receiving a message: " << event.reason << '\n';
-                    client.close();
-                }
-                else if constexpr (std::same_as<event_type, nom::event::network_error>)
-                {
-                    std::cerr << event.description << ": " << event.message << '\n';
-                    client.close();
-                }
-            }});
+            },
+            [&](nom::web_socket&, const nom::event::on_disconnected& event)
+            {
+                std::cerr << "Disconnected before receiving a message: " << event.reason << '\n';
+                client.close();
+            },
+            [&](nom::web_socket&, const nom::event::network_error& event)
+            {
+                std::cerr << event.description << ": " << event.message << '\n';
+                client.close();
+            }));
 
         io.run(); // Drain canceled handlers too; no final event is required after close().
         nom::flush_logger(nom::main_logger);

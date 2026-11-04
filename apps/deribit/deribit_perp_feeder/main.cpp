@@ -96,13 +96,12 @@ public:
     explicit deribit_perp_client(const app_config& config)
         : requests_(subscription_requests(config)), client_(nom::ctx(this).io.get_executor(), nom::url(config.endpoint))
     {
-        // Control probes support our receive-idle monitor on quiet feeds. We do not enable
+        // Control probes check connection availability on quiet feeds. We do not enable
         // public/set_heartbeat: that separate application protocol requires public/test replies
         // to test_request notifications, which control Pongs cannot satisfy.
         // https://docs.deribit.com/api-reference/session-management/public-set_heartbeat
         auto params = client_.params();
         params.active_ping = nom::ws_params::client_ping_probe{};
-        params.receive_watchdog = nom::ws_params::receive_data_watchdog{};
         client_.update_params(params);
     }
 
@@ -115,7 +114,7 @@ public:
             std::ostringstream address;
             address << client_.url();
             LINFO("Connecting to {}", address.str());
-            client_.connect(nom::web_socket::delegate{std::ref(*this)});
+            client_.connect(nom::web_socket::ws_delegate{std::ref(*this)});
             break;
         }
         case nom::event::service_command::stop:

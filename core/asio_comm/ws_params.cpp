@@ -10,28 +10,12 @@ module;
 module nom.asio_comm;
 
 import std;
+import :http_validation;
 
 namespace nom
 {
     namespace beast = boost::beast;
     namespace http = beast::http;
-
-    bool is_header_name(std::string_view name) noexcept
-    {
-        return !name.empty() && std::ranges::all_of(name,
-                                                    [](unsigned char c)
-                                                    {
-                                                        return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
-                                                               (c >= '0' && c <= '9') ||
-                                                               std::string_view{"!#$%&'*+-.^_`|~"}.find(
-                                                                   static_cast<char>(c)) != std::string_view::npos;
-                                                    });
-    }
-
-    bool is_header_value(std::string_view value) noexcept
-    {
-        return std::ranges::all_of(value, [](unsigned char c) { return c == '\t' || (c >= 0x20 && c != 0x7f); });
-    }
 
     bool is_handshake_header(std::string_view name) noexcept
     {
@@ -56,8 +40,6 @@ namespace nom
     {
         if (async_operation_timeout_sec == 0)
             return std::unexpected("/async_operation_timeout_sec must be positive");
-        if (receive_watchdog && receive_watchdog->timeout_sec == 0)
-            return std::unexpected("/receive_watchdog/timeout_sec must be positive");
         if (passive_ping && passive_ping->ping_timeout_sec == 0)
             return std::unexpected("/passive_ping/ping_timeout_sec must be positive");
         if (active_ping)
@@ -78,23 +60,26 @@ namespace nom
             return std::unexpected("/agent_name must be nonempty");
         if (agent_name.size() > http::fields::max_value_size)
             return std::unexpected("/agent_name exceeds the supported HTTP field length");
-        if (!is_header_value(agent_name))
-            return std::unexpected("/agent_name contains an invalid HTTP field character");
+        if (!detail::is_http_header_value(agent_name))
+            return std::unexpected("/agent_name contains a control character; only horizontal tab is allowed "
+                                   "(CR, LF and NUL are forbidden)");
 
         for (std::size_t i = 0; i < headers.size(); ++i)
         {
             const auto& header = headers[i];
             const auto path = "/headers/" + std::to_string(i);
-            if (!is_header_name(header.name))
-                return std::unexpected(path + "/name must be a nonempty HTTP token");
+            if (!detail::is_http_header_name(header.name))
+                return std::unexpected(path + "/name must be a nonempty HTTP token: ASCII letters, digits or "
+                                              "!#$%&'*+-.^_`|~");
             if (header.name.size() > http::fields::max_name_size)
                 return std::unexpected(path + "/name exceeds the supported HTTP field length");
             if (is_handshake_header(header.name))
                 return std::unexpected(path + "/name is reserved for the WebSocket handshake");
             if (header.value.size() > http::fields::max_value_size)
                 return std::unexpected(path + "/value exceeds the supported HTTP field length");
-            if (!is_header_value(header.value))
-                return std::unexpected(path + "/value contains an invalid HTTP field character");
+            if (!detail::is_http_header_value(header.value))
+                return std::unexpected(path + "/value contains a control character; only horizontal tab is allowed "
+                                              "(CR, LF and NUL are forbidden)");
             for (std::size_t j = 0; j < i; ++j)
                 if (beast::iequals(header.name, headers[j].name))
                     return std::unexpected(path + "/name duplicates an earlier header");
@@ -123,11 +108,6 @@ namespace nom
         if (params.active_ping)
             os << "{ping_period_sec=" << params.active_ping->ping_period_sec
                << ", pong_timeout_sec=" << params.active_ping->pong_timeout_sec << '}';
-        else
-            os << "disabled";
-        os << ", receive_watchdog=";
-        if (params.receive_watchdog)
-            os << "{timeout_sec=" << params.receive_watchdog->timeout_sec << '}';
         else
             os << "disabled";
         return os << '}';

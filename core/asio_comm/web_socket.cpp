@@ -7,13 +7,11 @@ module;
 
 #include <boost/asio/compose.hpp>
 #include <boost/asio/ssl/host_name_verification.hpp>
-#include <boost/asio/steady_timer.hpp>
 #include <boost/beast/core.hpp>
 #include <boost/beast/ssl.hpp>
 #include <boost/beast/websocket.hpp>
 #include <boost/beast/websocket/ssl.hpp>
 #include <cassert>
-#include <fmt/chrono.h>
 #include <fmt/ostream.h>
 
 module nom.asio_comm;
@@ -80,13 +78,14 @@ namespace nom
     private:
         inline static std::atomic<std::uint64_t> next_id{0};
 
-        struct setup_state
+        struct connection_setup
         {
-            explicit setup_state(const net::any_io_executor& executor) : resolver(executor)
+            explicit connection_setup(const net::any_io_executor& executor) : resolver(executor), deadline(executor)
             {
             }
 
             tcp::resolver resolver;
+            nom::timer deadline;
             std::string host_header;
         };
 
@@ -104,7 +103,7 @@ namespace nom
             {
             }
 
-            net::steady_timer timer;
+            nom::timer timer;
             ap_status status{init};
             std::uint64_t sequence{};
             std::string payload;
@@ -117,7 +116,7 @@ namespace nom
                    "State transitions must change the state in increasing order");
             status_ = NewStatus;
             if constexpr (NewStatus == ws_status::connected || NewStatus == ws_status::conn_failed)
-                setup_.reset();
+                connection_setup_.reset();
         }
 
     public:
@@ -139,12 +138,12 @@ namespace nom
             return id_;
         }
 
-        void update_delegate(const delegate& callbacks)
+        void update_delegate(const ws_delegate& delegate)
         {
-            delegate_ = callbacks;
+            delegate_ = delegate;
         }
 
-        const delegate& callbacks() const noexcept
+        const ws_delegate& delegate() const noexcept
         {
             return delegate_;
         }
@@ -173,7 +172,7 @@ namespace nom
                 return;
             }
 
-            // Cleanup is best effort. Keep each attempt independent, without logging or delegate calls.
+            // Cleanup is best effort. Keep each attempt independent, without logging or ws_delegate calls.
             try
             {
                 // The retained stream must not keep Beast's handshake/close timer alive after abort.
@@ -192,30 +191,10 @@ namespace nom
             catch (...)
             {
             }
-            try
-            {
-                if (receive_watchdog_timer_)
-                    receive_watchdog_timer_->cancel();
-            }
-            catch (...)
-            {
-            }
-            try
-            {
-                if (active_ping_)
-                    active_ping_->timer.cancel();
-            }
-            catch (...)
-            {
-            }
-            try
-            {
-                if (passive_ping_timer_)
-                    passive_ping_timer_->cancel();
-            }
-            catch (...)
-            {
-            }
+            if (active_ping_)
+                active_ping_->timer.cancel();
+            if (passive_ping_timer_)
+                passive_ping_timer_->cancel();
         }
 
         ws_status status() const noexcept
@@ -224,7 +203,7 @@ namespace nom
         }
 
         // TODO IDs and stage definitions: ws_current_work.md.
-        // TODO[WS-CONNECT-DEADLINE] (stage WS-06): Make the connection procedure time-bound
+        // DEV-DONE/LIVE-TEST-PENDING TODO[WS-CONNECT-DEADLINE] (stage WS-06): Make the connection procedure time-bound
         // (we can use default_async_operation_timeout_sec for it).
         // TODO[WS-TRANSPORT-OPTIONS] (stage WS-09): Test various connection options
         // (different TLS levels, no SSL?).
@@ -239,16 +218,22 @@ namespace nom
                 try
                 {
                     LINFO("{} connecting with params {}", id(), fmt::streamed(parent_->params_));
-                    if (parent_->params_.receive_watchdog)
-                        receive_watchdog_timer_.emplace(parent_->io_->executor);
                     if (parent_->params_.active_ping)
                         active_ping_.emplace(parent_->io_->executor);
                     if (parent_->params_.passive_ping)
                         passive_ping_timer_.emplace(parent_->io_->executor);
-                    setup_ = std::make_unique<setup_state>(parent_->io_->executor);
-                    setup_->resolver.async_resolve(parent_->url_.host(),
-                                                   std::to_string(parent_->url_.port()),
-                                                   beast::bind_front_handler(&session::on_resolve, shared_from_this()));
+                    connection_setup_ = std::make_unique<connection_setup>(parent_->io_->executor);
+                    connection_setup_->deadline.arm_after(
+                        std::chrono::seconds{parent_->params_.async_operation_timeout_sec},
+                        [weak = weak_from_this()]
+                        {
+                            if (auto self = weak.lock())
+                                self->on_connection_deadline();
+                        });
+                    connection_setup_->resolver.async_resolve(
+                        parent_->url_.host(),
+                        std::to_string(parent_->url_.port()),
+                        beast::bind_front_handler(&session::on_resolve, shared_from_this()));
                 }
                 catch (...)
                 {
@@ -264,6 +249,31 @@ namespace nom
         }
 
     private:
+        void on_connection_deadline()
+        {
+            switch (status_)
+            {
+            case ws_status::connecting:
+            {
+                const auto now = std::chrono::steady_clock::now();
+                auto message = std::format("Connection deadline exceeded after {} seconds",
+                                           parent_->params_.async_operation_timeout_sec);
+                close();
+                LWARN("{} {}", id(), message);
+                delegate_(*parent_,
+                          event::network_error{
+                              .ts = now, .description = "Connection timeout", .message = std::move(message)});
+                break;
+            }
+            case ws_status::conn_failed:
+                break;
+            default:
+                assert(false && "Connection deadline requires connecting state");
+                LERROR("{} Unexpected connection deadline state: {}", id(), enum_to_string(status_));
+                break;
+            }
+        }
+
         // Connection stages run sequentially; close() leaves connecting before cancelling operations.
         void on_resolve(beast::error_code ec, tcp::resolver::results_type endpoints)
         {
@@ -289,8 +299,6 @@ namespace nom
 
                 try
                 {
-                    beast::get_lowest_layer(stream_).expires_after(
-                        std::chrono::seconds(parent_->params_.async_operation_timeout_sec));
                     beast::get_lowest_layer(stream_).async_connect(
                         endpoints, beast::bind_front_handler(&session::on_connect, shared_from_this()));
                 }
@@ -354,8 +362,8 @@ namespace nom
 
                     // The HTTP Host header brackets IPv6 literals; DNS and TLS use the unbracketed host.
                     const auto& host = parent_->url_.host();
-                    setup_->host_header = (std::string::npos == host.find(':') ? host : '[' + host + ']') + ':' +
-                                          std::to_string(ep.port());
+                    connection_setup_->host_header = (std::string::npos == host.find(':') ? host : '[' + host + ']') +
+                                                     ':' + std::to_string(ep.port());
                     stream_.next_layer().set_verify_callback(ssl::host_name_verification(host));
                     stream_.next_layer().async_handshake(
                         ssl::stream_base::client,
@@ -407,9 +415,11 @@ namespace nom
 
                 try
                 {
-                    // Beast's WebSocket timeout takes over after the TLS handshake.
-                    beast::get_lowest_layer(stream_).expires_never();
-                    stream_.set_option(websocket::stream_base::timeout::suggested(beast::role_type::client));
+                    // The setup deadline covers the whole attempt, including the WebSocket upgrade.
+                    stream_.set_option(
+                        websocket::stream_base::timeout{.handshake_timeout = websocket::stream_base::none(),
+                                                        .idle_timeout = websocket::stream_base::none(),
+                                                        .keep_alive_pings = false});
                     stream_.read_message_max(parent_->params_.max_message_size);
                     stream_.set_option(websocket::stream_base::decorator(
                         [this](websocket::request_type& req)
@@ -419,7 +429,7 @@ namespace nom
                             for (const auto& header : parent_->params_.headers)
                                 req.set(header.name, header.value);
                         }));
-                    stream_.async_handshake(setup_->host_header,
+                    stream_.async_handshake(connection_setup_->host_header,
                                             parent_->url_.target(),
                                             beast::bind_front_handler(&session::on_handshake, shared_from_this()));
                 }
@@ -484,9 +494,17 @@ namespace nom
                                                    .message = std::string(message)});
                 };
                 // on_ssl_handshake() completed TLS setup and started the WebSocket handshake.
+                if (ec)
+                {
+                    set_status<ws_status::conn_failed>();
+                    LERROR("{} Connect/Handshake error: {}", id(), ec.message());
+                    notify_error("Connect/Handshake error", ec.message());
+                    break;
+                }
                 try
                 {
-                    beast::get_lowest_layer(stream_).expires_never();
+                    // Preserve Beast's closing-handshake timeout; idle timeout and automatic Pings stay disabled.
+                    stream_.set_option(websocket::stream_base::timeout::suggested(beast::role_type::client));
                 }
                 catch (const std::exception& error)
                 {
@@ -500,18 +518,12 @@ namespace nom
                     notify_error("WebSocket handshake completion error", "Unknown exception");
                     break;
                 }
-                if (ec)
-                {
-                    set_status<ws_status::conn_failed>();
-                    LERROR("{} Connect/Handshake error: {}", id(), ec.message());
-                    notify_error("Connect/Handshake error", ec.message());
-                    break;
-                }
-                last_data_recv_ts_ = std::chrono::steady_clock::now();
+                const auto connected_at = std::chrono::steady_clock::now();
                 LDEBUG("{} connected", id());
                 set_status<ws_status::connected>();
-                delegate_(*parent_, event::on_connected{.ts = last_data_recv_ts_});
-                // The delegate may call close() or trigger a write-failure shutdown before receive/timer work starts.
+                delegate_(*parent_, event::on_connected{.ts = connected_at});
+                // The ws_delegate may call close() or trigger a write-failure shutdown before receive/timer work
+                // starts.
                 if (ws_status::connected != status_)
                     break;
 
@@ -522,10 +534,8 @@ namespace nom
                 stream_.control_callback(beast::bind_front_handler(&session::on_control, this));
 
                 if (passive_ping_timer_)
-                    start_passive_ping_timer(last_data_recv_ts_);
+                    start_passive_ping_timer(connected_at);
                 stream_.async_read(buffer_, beast::bind_front_handler(&session::on_receive, shared_from_this()));
-                if (receive_watchdog_timer_)
-                    start_receive_watchdog_timer();
                 break;
             }
             case ws_status::conn_failed:
@@ -564,8 +574,6 @@ namespace nom
                 case websocket::frame_type::close:
                 {
                     LDEBUG("{} Close request received from server", id());
-                    if (receive_watchdog_timer_)
-                        receive_watchdog_timer_->cancel();
                     if (active_ping_)
                         active_ping_->timer.cancel();
                     if (passive_ping_timer_)
@@ -583,7 +591,7 @@ namespace nom
                 // close(), a previous peer close, a read error, or on_shutdown() disconnected this session.
                 break;
             default:
-                assert(false && "Control callbacks require connected, disconnecting, or disconnected state");
+                assert(false && "Control handler requires connected, disconnecting, or disconnected state");
                 LERROR("{} Unexpected state: {}", id(), enum_to_string(status_));
                 break;
             }
@@ -593,33 +601,25 @@ namespace nom
         {
             assert(passive_ping_timer_ && parent_->params_.passive_ping);
             // The first deadline uses handshake time; later deadlines use server Ping receipt time.
-            passive_ping_timer_->expires_at(received_at +
-                                            std::chrono::seconds{parent_->params_.passive_ping->ping_timeout_sec});
-            passive_ping_timer_->async_wait(
-                beast::bind_front_handler(&session::on_passive_ping_timer, shared_from_this()));
+            passive_ping_timer_->arm_at(received_at +
+                                            std::chrono::seconds{parent_->params_.passive_ping->ping_timeout_sec},
+                                        [weak = weak_from_this()]
+                                        {
+                                            if (auto self = weak.lock())
+                                                self->on_passive_ping_timer();
+                                        });
         }
 
-        void on_passive_ping_timer(beast::error_code ec)
+        void on_passive_ping_timer()
         {
             switch (status_)
             {
             case ws_status::connected:
             {
-                if (net::error::operation_aborted == ec) //...timer is cancelled
-                    break;
-
                 assert(passive_ping_timer_ && parent_->params_.passive_ping);
                 const auto now = std::chrono::steady_clock::now();
-                // POSTPONED TODO[WS-TIMER-GENERATION] (stage WS-06): Replace active/passive Ping stale callback checks
-                // with generation-based timers.
-                // After a long suspension, an obsolete callback can see now >= the new expiry.
-                if (!ec && now < passive_ping_timer_->expiry())
-                    break;
-
-                // steady_timer normally reports success or operation_aborted; other errors are handled defensively.
-                auto reason = ec ? "Passive Ping timer error: " + ec.message()
-                                 : std::format("Passive Ping timeout: no server Ping within {} seconds",
-                                               parent_->params_.passive_ping->ping_timeout_sec);
+                auto reason = std::format("Passive Ping timeout: no server Ping within {} seconds",
+                                          parent_->params_.passive_ping->ping_timeout_sec);
                 // An unresponsive peer must not delay disconnection through a close handshake.
                 close();
                 LWARN("{} {}", id(), reason);
@@ -637,22 +637,16 @@ namespace nom
             }
         }
 
-        void start_receive_watchdog_timer()
-        {
-            assert(receive_watchdog_timer_ && parent_->params_.receive_watchdog);
-            const auto receive_watchdog_timeout_sec = parent_->params_.receive_watchdog->timeout_sec;
-            receive_watchdog_timer_->expires_after(std::chrono::seconds{receive_watchdog_timeout_sec});
-            receive_watchdog_timer_->async_wait(
-                beast::bind_front_handler(&session::on_receive_watchdog_timer, shared_from_this()));
-        }
-
         void start_active_ping_timer()
         {
             assert(active_ping_ && parent_->params_.active_ping);
             active_ping_->status = active_ping::waiting_to_ping;
-            active_ping_->timer.expires_after(std::chrono::seconds{parent_->params_.active_ping->ping_period_sec});
-            active_ping_->timer.async_wait(
-                beast::bind_front_handler(&session::on_active_ping_timer, shared_from_this()));
+            active_ping_->timer.arm_after(std::chrono::seconds{parent_->params_.active_ping->ping_period_sec},
+                                          [weak = weak_from_this()]
+                                          {
+                                              if (auto self = weak.lock())
+                                                  self->on_active_ping_timer();
+                                          });
         }
 
         void fail_active_ping(std::string reason)
@@ -668,29 +662,23 @@ namespace nom
             delegate_(*parent_, event::on_disconnected{.ts = now, .reason = std::move(reason)});
         }
 
-        void on_active_ping_timer(beast::error_code ec)
+        void on_active_ping_timer()
         {
             // Pending operations can outlive the connection and its owner.
             if (ws_status::connected != status_)
                 return;
-            if (net::error::operation_aborted == ec) //...timer is cancelled
-                return;
-            if (ec)
-            {
-                // steady_timer normally reports success or operation_aborted; other errors are handled defensively.
-                fail_active_ping("Active Ping timer error: " + ec.message());
-                return;
-            }
-
             assert(active_ping_ && parent_->params_.active_ping);
             switch (active_ping_->status)
             {
             case active_ping::waiting_to_ping:
                 active_ping_->payload = std::to_string(++active_ping_->sequence);
                 active_ping_->status = active_ping::sending_ping;
-                active_ping_->timer.expires_after(std::chrono::seconds{parent_->params_.async_operation_timeout_sec});
-                active_ping_->timer.async_wait(
-                    beast::bind_front_handler(&session::on_active_ping_expire_timer, shared_from_this()));
+                active_ping_->timer.arm_after(std::chrono::seconds{parent_->params_.async_operation_timeout_sec},
+                                              [weak = weak_from_this()]
+                                              {
+                                                  if (auto self = weak.lock())
+                                                      self->on_active_ping_expire_timer();
+                                              });
                 stream_.async_ping(websocket::ping_data{active_ping_->payload.data(), active_ping_->payload.size()},
                                    beast::bind_front_handler(&session::on_active_ping, shared_from_this()));
                 break;
@@ -711,24 +699,11 @@ namespace nom
             }
         }
 
-        void on_active_ping_expire_timer(beast::error_code ec)
+        void on_active_ping_expire_timer()
         {
             if (ws_status::connected != status_)
                 return;
-            if (net::error::operation_aborted == ec) //...timer is cancelled
-                return;
-            if (ec)
-            {
-                // steady_timer normally reports success or operation_aborted; other errors are handled defensively.
-                fail_active_ping("Active Ping send timer error: " + ec.message());
-                return;
-            }
-
             assert(active_ping_ && parent_->params_.active_ping);
-            // See WS-TIMER-GENERATION: a successful write can supersede an already queued expiry.
-            if (std::chrono::steady_clock::now() < active_ping_->timer.expiry())
-                return;
-
             switch (active_ping_->status)
             {
             case active_ping::sending_ping:
@@ -752,26 +727,11 @@ namespace nom
             }
         }
 
-        void on_active_pong_timer(beast::error_code ec)
+        void on_active_pong_timer()
         {
             if (ws_status::connected != status_)
                 return;
-            if (net::error::operation_aborted == ec) //...timer is cancelled
-                return;
-            if (ec)
-            {
-                // steady_timer normally reports success or operation_aborted; other errors are handled defensively.
-                fail_active_ping("Active Pong timer error: " + ec.message());
-                return;
-            }
-
             assert(active_ping_ && parent_->params_.active_ping);
-            // POSTPONED TODO[WS-TIMER-GENERATION] (stage WS-06): Replace active/passive Ping stale callback checks
-            // with generation-based timers.
-            // After a long suspension, an obsolete callback can see now >= the new expiry.
-            if (std::chrono::steady_clock::now() < active_ping_->timer.expiry())
-                return;
-
             switch (active_ping_->status)
             {
             case active_ping::send_done:
@@ -813,9 +773,12 @@ namespace nom
             case active_ping::sending_ping:
                 LDEBUG("{} sent ping to server", id());
                 active_ping_->status = active_ping::send_done;
-                active_ping_->timer.expires_after(std::chrono::seconds{parent_->params_.active_ping->pong_timeout_sec});
-                active_ping_->timer.async_wait(
-                    beast::bind_front_handler(&session::on_active_pong_timer, shared_from_this()));
+                active_ping_->timer.arm_after(std::chrono::seconds{parent_->params_.active_ping->pong_timeout_sec},
+                                              [weak = weak_from_this()]
+                                              {
+                                                  if (auto self = weak.lock())
+                                                      self->on_active_pong_timer();
+                                              });
                 break;
             case active_ping::failed:
                 break;
@@ -858,55 +821,6 @@ namespace nom
             }
         }
 
-        void on_receive_watchdog_timer(beast::error_code ec)
-        {
-            switch (status_)
-            {
-            case ws_status::connected:
-            {
-                // on_handshake() started the receive watchdog timer; subsequent healthy expiries rearm it.
-                if (ec)
-                {
-                    if (net::error::operation_aborted == ec)
-                        break;
-
-                    LWARN("{} Receive watchdog timer error: {}", id(), ec.message());
-                    shutdown();
-                    break;
-                }
-
-                assert(parent_->params_.receive_watchdog);
-                using namespace std::chrono;
-
-                const auto elapsed = steady_clock::now() - last_data_recv_ts_;
-                if (elapsed > seconds{parent_->params_.receive_watchdog->timeout_sec})
-                {
-                    LWARN("{} Receive watchdog timer expired: no complete data message for {}",
-                          id(),
-                          duration_cast<milliseconds>(elapsed));
-                    shutdown();
-                    break;
-                }
-
-                start_receive_watchdog_timer();
-                break;
-            }
-            case ws_status::disconnecting:
-                // shutdown() canceled the pending wait; an already queued expiry is ignored too.
-                break;
-            case ws_status::disconnected:
-                // close() (including reconnect/destruction), peer close, a read error, or on_shutdown()
-                // disconnected the session before this canceled or already queued wait completed.
-                break;
-            default:
-                // The receive watchdog timer starts only after a successful handshake; sessions are never reused.
-                assert(false &&
-                       "Receive watchdog timer completions require connected, disconnecting, or disconnected state");
-                LERROR("{} Unexpected state: {}", id(), enum_to_string(status_));
-                break;
-            }
-        }
-
         std::string disconnect_reason(beast::error_code ec) const
         {
             std::string reason;
@@ -931,14 +845,12 @@ namespace nom
             {
             // on_handshake() set connected and started the read loop; no close has started since.
             case ws_status::connected:
-            // shutdown() (receive watchdog timer or write failure) ran before this read completion.
+            // shutdown() after a write failure ran before this read completion.
             // A previous event::ws_data callback can also trigger shutdown(), then rearm the read below.
             case ws_status::disconnecting:
             {
                 if (ec)
                 {
-                    if (receive_watchdog_timer_)
-                        receive_watchdog_timer_->cancel();
                     if (active_ping_)
                         active_ping_->timer.cancel();
                     if (passive_ping_timer_)
@@ -951,15 +863,14 @@ namespace nom
                 }
 
                 const auto mutable_buffer = buffer_.data(); // Non-owning view; no payload copy.
-                last_data_recv_ts_ = std::chrono::steady_clock::now();
 
                 delegate_(*parent_,
-                          event::ws_data{.ts = last_data_recv_ts_,
+                          event::ws_data{.ts = std::chrono::steady_clock::now(),
                                          .data = std::span<const char>(static_cast<char*>(mutable_buffer.data()),
                                                                        mutable_buffer.size())});
                 buffer_.consume(buffer_.size());
 
-                // The delegate may close or replace this session; do not rearm after disconnection.
+                // The ws_delegate may close or replace this session; do not rearm after disconnection.
                 if (ws_status::disconnected == status_)
                     break;
 
@@ -1013,8 +924,6 @@ namespace nom
             case ws_status::connected:
             {
                 set_status<ws_status::disconnecting>();
-                if (receive_watchdog_timer_)
-                    receive_watchdog_timer_->cancel();
                 if (active_ping_)
                     active_ping_->timer.cancel();
                 if (passive_ping_timer_)
@@ -1063,15 +972,13 @@ namespace nom
 
         ws_status status_{ws_status::init};
         web_socket* parent_;
-        delegate delegate_;
+        ws_delegate delegate_;
         std::string id_;
-        std::unique_ptr<setup_state> setup_;
+        std::unique_ptr<connection_setup> connection_setup_;
         websocket::stream<ws_tls_stream> stream_;
         beast::flat_buffer buffer_;
-        network_timestamp last_data_recv_ts_{};
-        std::optional<net::steady_timer> receive_watchdog_timer_;
         std::optional<active_ping> active_ping_;
-        std::optional<net::steady_timer> passive_ping_timer_;
+        std::optional<nom::timer> passive_ping_timer_;
     };
 
     // DONE TODO[WS-EAGER-SESSION] (stage WS-02): Always create a session so web_socket::send
@@ -1128,14 +1035,14 @@ namespace nom
         close();
     }
 
-    void web_socket::update_delegate(const delegate& callbacks)
+    void web_socket::update_delegate(const ws_delegate& delegate)
     {
-        session_->update_delegate(callbacks);
+        session_->update_delegate(delegate);
     }
 
-    const web_socket::delegate& web_socket::callbacks() const noexcept
+    const web_socket::ws_delegate& web_socket::delegate() const noexcept
     {
-        return session_->callbacks();
+        return session_->delegate();
     }
 
     void web_socket::update_params(const ws_params& params)
@@ -1159,17 +1066,17 @@ namespace nom
         }
     }
 
-    void web_socket::connect(const delegate& callbacks)
+    void web_socket::connect(const ws_delegate& delegate)
     {
         if (ws_status::init == session_->status())
         {
-            session_->update_delegate(callbacks);
+            session_->update_delegate(delegate);
         }
         else
         {
             close();
             auto next_session = std::make_shared<session>(this);
-            next_session->update_delegate(callbacks);
+            next_session->update_delegate(delegate);
             session_ = std::move(next_session);
         }
         session_->connect();

@@ -9,7 +9,6 @@
 #include <boost/asio/any_io_executor.hpp>
 #include <boost/asio/io_context.hpp>
 #include <boost/asio/signal_set.hpp>
-#include <boost/asio/steady_timer.hpp>
 #include <boost/system/error_code.hpp>
 #include <csignal>
 #include <spd_logger/logging.h>
@@ -184,11 +183,11 @@ template <typename Traits> class htx_spot_client
 public:
     explicit htx_spot_client(const app_config& config)
         : requests_(subscription_requests(config)),
-          client_(nom::ctx(this).io.get_executor(), nom::url(config.endpoint)), subscribe_timer_(nom::ctx(this).io)
+          client_(nom::ctx(this).io.get_executor(), nom::url(config.endpoint)),
+          subscribe_timer_(nom::ctx(this).io.get_executor())
     {
         auto params = client_.params();
         params.max_message_size = config.max_message_size;
-        params.receive_watchdog = nom::ws_params::receive_data_watchdog{};
         client_.update_params(params);
     }
 
@@ -197,7 +196,7 @@ public:
         switch (command)
         {
         case nom::event::service_command::start:
-            client_.connect(nom::web_socket::delegate{std::ref(*this)});
+            client_.connect(nom::web_socket::ws_delegate{std::ref(*this)});
             break;
         case nom::event::service_command::stop:
             subscribe_timer_.cancel();
@@ -268,20 +267,14 @@ private:
         if (next_request_ < requests_.size())
         {
             // Startup pacing only; a dynamic subscriber must also track its exchange's quotas.
-            subscribe_timer_.expires_after(std::chrono::milliseconds(200));
-            subscribe_timer_.async_wait(
-                [this](const boost::system::error_code& error)
-                {
-                    if (!error)
-                        subscribe();
-                });
+            subscribe_timer_.arm_after(std::chrono::milliseconds(200), [this] { subscribe(); });
         }
     }
 
     std::vector<std::string> requests_;
     std::size_t next_request_{0};
     nom::web_socket client_;
-    boost::asio::steady_timer subscribe_timer_;
+    nom::timer subscribe_timer_;
 };
 
 struct htx_spot_assembly : nom::assembly<htx_spot_assembly, asio_service, market_data_logger, htx_spot_client>

@@ -6,6 +6,8 @@ the [session implementation](../../core/asio_comm/web_socket.cpp). The diagram d
 one `web_socket::session`. The wrapper constructs its first session eagerly; the first
 `connect()` starts that session, and later attempts close and replace the previous session. Usage examples are in the [WebSocket example README](../../apps/web_socket_example/README.md).
 Usage constraints, deferred work and validation coverage follow the event descriptions.
+See [WebSocket Ping and heartbeats](web_socket_ping.md) for control-Ping design, probe state
+transitions and exchange-specific application heartbeat policies.
 The diagram assumes the existing contract of serialized calls and nonthrowing delegates.
 `web_socket` holds the session and forwards commands and queries. Its `connect()` only checks
 whether the session is still in its initial `init` state; otherwise it closes and replaces it.
@@ -33,7 +35,7 @@ stateDiagram-v2
     [*] --> Init
     state "init" as Init
     Init --> Init: close() / no-op
-    Init --> Connecting: **[connect]** / async_resolve
+    Init --> Connecting: **[connect]** / arm connection deadline, async_resolve
 
     state "disconnected" as Disconnected
     state "connecting" as Connecting {
@@ -52,12 +54,13 @@ stateDiagram-v2
     state "disconnecting" as Disconnecting
     state "conn_failed" as ConnFailed
 
-    WsHandshaking --> Connected: WsHandshakeDone<br/>/ on_connected, start I/O if still connected
+    WsHandshaking --> Connected: WsHandshakeDone<br/>/ cancel connection deadline, on_connected, start I/O if still connected
     Connecting --> ConnFailed: ConnectError, ConnectSetupException / emit network_error
+    Connecting --> ConnFailed: ConnectionDeadline<br/>/ close transport, emit network_error
     Resolving --> ConnFailed: ConnectStartException / rethrow
 
     Connected --> Connected: ReadDone [ok]<br/>/ ws_data, next read unless disconnected
-    Connected --> Disconnecting: shutdown [idle timer or write failure]<br/>/ cancel timers, async_close
+    Connected --> Disconnecting: shutdown [write failure]<br/>/ cancel timers, async_close
     Connected --> Disconnected: Ping deadline missed or active probe fails<br/>/ close transport, on_disconnected with diagnostic reason
     Connected --> Disconnected: ControlFrame [close], ReadDone [error]<br/>/ cancel enabled timers, on_disconnected
 
@@ -91,7 +94,8 @@ stateDiagram-v2
 - `close()`, called by **[close]**, replacement **[connect]**, or **[destroy]**, is a no-op in
   `init`. Otherwise it maps `connecting` to `conn_failed` and `connected`/`disconnecting` to
   `disconnected`, and preserves an existing
-  terminal status. Selecting `conn_failed` releases setup storage and cancels pending resolution.
+  terminal status. Selecting `conn_failed` releases setup storage and cancels pending resolution
+  and the connection deadline.
   It then independently disables Beast handshake/close timeouts and attempts TCP close and
   timer cancellation.
   Cleanup exceptions are suppressed; no event is delivered. The wrapper retains its session
@@ -106,11 +110,12 @@ stateDiagram-v2
   selects it; further connection completions do nothing, `send()` rejects writes, and repeated
   `close()` preserves it. Reconnect replaces the session rather than resetting that terminal state.
   Complete transport cleanup remains a separate concern.
-- The resolver and HTTP Host-header string belong to a uniquely owned setup object. It is
+- The resolver, connection-deadline timer and HTTP Host-header string belong to a uniquely owned setup object. It is
   allocated inside `connect()` after entering `connecting` and released when status becomes
   `connected` or `conn_failed`, before notification. Terminal completion guards run before accessing setup storage, so
   canceled operations can finish after it is released. An unused `init` session has no setup
-  allocation; reconnect starts with fresh setup storage.
+  allocation; reconnect starts with fresh setup storage. Destroying the setup timer cancels
+  its wait, including an expired completion that has not yet been dispatched.
 - `shutdown()` is an internal helper that requires connected status. Any other status is
   a precondition violation: assert, or log and return when assertions are disabled. Pending attempts are
   cancelled through `close()`. Every transition to `conn_failed` or `disconnected` uses
@@ -144,20 +149,20 @@ with success if already queued.
 - **Move assignment** is `noexcept`: exchange the two wrappers' state and swap the sessions'
   parent pointers, then call `other.close()` on the former destination session. Swapping is
   independent of session status. The source receives the destination's former state after close;
-  it remains usable, including for a new `connect(callbacks)`. Old destination completions retain
+  it remains usable, including for a new `connect(delegate)`. Old destination completions retain
   their terminal session and cannot notify either wrapper. Self-move is a no-op. Terminal
   sessions retain their status and acquire their new holder's address. TLS contexts keep their heap addresses.
 - **Copying** remains disabled: duplicating ownership of an active connection has no defined
   meaning. The delegate travels with its session during moves; user captures retain their values.
-- **`[connect]`** — `web_socket::connect(callbacks)`: use the eagerly created session directly
+- **`[connect]`** — `web_socket::connect(delegate)`: use the eagerly created session directly
   while it is still in `init`; otherwise close and replace it with a fresh session. Set the
   session's delegate and forward `connect()` to the selected session. A replacement copies
-  the callbacks before the old session is released, including for `connect(client.callbacks())`.
+  the delegate before the old session is released, including for `connect(client.delegate())`.
   The wrapper does not inspect the old session's state after close. Read the owner's `ws_params`
   through `parent_`; parameters, including headers, persist across reconnects and are not copied
   into the session.
   The session's `connect()` dispatches through `switch (status_)`: `init` enters `connecting`,
-  constructs the enabled timers, allocates setup storage, and starts DNS resolution; other
+  constructs the enabled timers, allocates setup storage, arms the connection deadline, and starts DNS resolution; other
   states log an error and do nothing. Terminal sessions are never reused. If timer construction,
   setup allocation or DNS initiation throws, the session
   becomes `conn_failed` and the original exception propagates to the caller; no delegate event
@@ -185,7 +190,7 @@ with success if already queued.
   delegates directly to its always-present session: connected writes; every other state logs
   a warning and returns false without writing.
 - **`[update_delegate]`** — replace the current session's delegate; no lifecycle transition.
-  `callbacks()` borrows that session's delegate. A borrowed reference remains valid while
+  `delegate()` borrows that session's `ws_delegate`. A borrowed reference remains valid while
   its session lives; reconnect installs a different session with its own callback storage.
 - **Parameter updates** — `params()` returns `const ws_params&`. `update_params(const ws_params&)`
   replaces the whole configuration only in `init`, `conn_failed`, or `disconnected`. It first
@@ -200,13 +205,12 @@ with success if already queued.
 
 `ws_params::validate() const` returns `std::expected<void, std::string>`. It is independent of
 session state and performs no I/O or mutation. Success is an empty expected value; failure is
-the first field diagnostic, such as `/receive_watchdog/timeout_sec must be positive` or
+the first field diagnostic, such as `/active_ping/pong_timeout_sec must be positive` or
 `/headers/1/name duplicates an earlier header`. Error-string allocation can still throw.
 
 | Parameter | Validation |
 | --- | --- |
-| `async_operation_timeout_sec` | Positive. Bounds TCP connect/TLS setup and, independently, each active Ping write. |
-| `receive_watchdog` | Optional `receive_data_watchdog`, absent by default. When enabled, `timeout_sec` must be positive and defaults to 30. Independent of Ping settings and setup timeout. |
+| `async_operation_timeout_sec` | Positive. One DNS-through-WebSocket-upgrade connection budget and, independently, a deadline for each active Ping write. |
 | `passive_ping` | Optional `server_ping_watchdog`; `ping_timeout_sec` must be positive. Defaults to absent. Enforces a server control Ping deadline from handshake completion and after each received Ping. |
 | `active_ping` | Optional `client_ping_probe`; `ping_period_sec` and `pong_timeout_sec` must be positive. Defaults to absent. Presence enables one control probe at a time, with a Pong deadline from successful write completion. Every control Pong is an event: it starts the next interval in `send_done`, or fails the probe in `waiting_to_ping` / `sending_ping`, regardless of payload. |
 | Socket buffer sizes | Between 1 and `INT_MAX`; OS acceptance is determined when socket options are applied. |
@@ -260,12 +264,16 @@ terminal session until reconnect or destruction.
   TLS handshake.
 - **`TlsHandshakeDone`** — `on_ssl_handshake`: successful TLS handshake starts the
   WebSocket handshake with the owner's current `params().headers` and `agent_name`.
-- **`WsHandshakeDone`** — `on_handshake`: successful WebSocket handshake records activity, sets
+- **`WsHandshakeDone`** — `on_handshake`: successful WebSocket handshake captures its completion time, sets
   `connected` and emits `on_connected`. If still connected after the delegate returns, start
-  the read/control callbacks and the independently optional receive/Ping timers. Calling `close()` or
+  the read/control callbacks and the independently optional active/passive Ping timers. Calling `close()` or
   triggering a write-failure shutdown from the delegate prevents this work from starting.
 - **`ConnectError`** — diagram shorthand for an error in any of those four completions, or SNI
   setup failure inside `on_connect`. Emit `network_error`; no automatic `close()`.
+- **`ConnectionDeadline`** — `on_connection_deadline`: while `connecting`, abort the transport,
+  enter `conn_failed` and emit one `network_error` with description `Connection timeout` and
+  message `Connection deadline exceeded after N seconds`. The same deadline covers all four
+  stages; completing a stage does not restart it. Pending setup completions are then ignored.
 - **`ConnectStartException`** — timer construction, setup allocation or DNS initiation throws
   during the caller's `connect()` invocation.
   Set `conn_failed` and rethrow to that caller; no delegate event or automatic `close()`.
@@ -280,14 +288,14 @@ terminal session until reconnect or destruction.
 - **`ReadDone(ec, bytes_transferred)`** — `on_receive`: complete message or read error.
   Dispatch through `switch (status_)`: connected and disconnecting share the read handler;
   disconnected completions are ignored. Other states assert, or log and return when assertions
-  are disabled. Success updates receive activity, emits `ws_data`, consumes the buffer and
+  are disabled. Success timestamps and emits `ws_data`, consumes the buffer and
   rearms unless disconnected during the delegate call. Error cancels enabled timers, sets
   disconnected and emits `on_disconnected`; remaining buffered bytes are not delivered.
 - **`ControlFrame(kind)`** — `on_control`: `ping`, `pong` or `close`, dispatched through
   `switch (status_)`. Connected and disconnecting share frame handling: the handshake started
   reading, and pending operations may still process control frames after `shutdown()` starts.
   Ping refreshes the enabled passive deadline; Pong is dispatched to enabled active probing.
-  Neither refreshes the receive watchdog. Close cancels
+  Close cancels
   enabled timers, sets `disconnected` and emits `on_disconnected` (`Closed by server`).
   Disconnected callbacks are ignored after `close()`, a prior peer close, a read error, or
   `on_shutdown()`. Other states assert, or log and return when assertions are disabled.
@@ -300,7 +308,7 @@ Valid `ReadDone` entry states and their origins:
 
 - `connected`: `on_handshake()` set connected and started the first read; subsequent successful
   reads rearm the loop while no close has started.
-- `disconnecting`: `shutdown()` set disconnecting after an idle timer expiry/error or write failure,
+- `disconnecting`: `shutdown()` set disconnecting after a write failure,
   before a pending read completion was delivered. A `ws_data` delegate can also cause a write
   failure; after it returns, the read handler rearms while disconnecting. Completed messages
   are still delivered in this state.
@@ -318,21 +326,22 @@ states and unknown status values.
 
 ### Timers and internal close request
 
-See the separate [active Ping state machine](../../core/asio_comm/ping_work.md#active-ping-state-machine)
+See the separate [active Ping state machine](web_socket_ping.md#active-ping-state-machine)
 for probe statuses and callback ordering.
 
-The receive watchdog, active Ping cadence, and passive Ping deadline have independent optional timers.
+Active Ping probing and the passive Ping deadline have independent optional `nom::timer` instances.
 `connect()` constructs each only
 when its policy is enabled; the waits start after a successful handshake. Cancellation
 checks whether the timer exists. Parameters can still be changed before the first connect.
+Canceled and superseded completions are suppressed before reaching the session.
+An unexpected Boost timer error terminates the application with a fatal error message.
 
 - **Passive Ping deadline.** When `passive_ping` is present, the first server control Ping is
   required within `ping_timeout_sec` of handshake completion. Each server Ping starts another
   full interval; data, application heartbeats, and Pongs do not refresh it. Expiry closes the
   transport immediately, enters `disconnected`, and emits one `on_disconnected` with reason
   `Passive Ping timeout: no server Ping within N seconds`. It does not wait for a close reply.
-  Timer errors likewise disconnect with a diagnostic. Canceled or superseded waits are ignored,
-  and explicit close, peer close, read failure, and graceful shutdown cancel this deadline.
+  Explicit close, peer close, read failure, and graceful shutdown cancel this deadline.
 - **Active Ping/Pong probe.** When `active_ping` is present, wait `ping_period_sec` after
   handshake and after each completed probe. Send one control Ping with a fresh payload and
   bound its write completion by `async_operation_timeout_sec`, including time queued behind
@@ -343,41 +352,24 @@ checks whether the timer exists. Parameters can still be changed before the firs
   data cannot satisfy the probe. Pong and timeout events are handled in dispatch order.
   A Pong timeout closes the transport immediately and emits one `on_disconnected` with reason
   `Active Pong timeout: no Pong within N seconds`. A send timeout likewise disconnects with
-  `Active Ping send timeout: write did not complete within N seconds`. Write/timer errors
-  also disconnect, with distinct diagnostic reasons. Every close/error path cancels probing;
+  `Active Ping send timeout: write did not complete within N seconds`. Ping write errors
+  also disconnect with a diagnostic reason. Every close/error path cancels probing;
   canceled or superseded waits and late completions cannot rearm a terminal session.
-- **`IdleTimerDone(ec)`** — `on_receive_watchdog_timer`: armed only when `receive_watchdog` is present,
-  scheduled every `timeout_sec` (30 seconds with the enabled watchdog's default timeout),
-  dispatched through `switch (status_)`. Monitoring is disabled by default;
-  `std::nullopt` skips the idle timer without affecting Pings.
-  In connected, successful expiry requests `shutdown()` when the full elapsed duration since the
-  last complete data message (or connection if none has arrived) exceeds `timeout_sec`;
-  otherwise rearm. There is no grace or tolerance. Data receipt does not reschedule a check.
-  Cancellation is ignored; other timer errors request shutdown.
-  Graceful shutdown is intentional for data inactivity. The watchdog log records the cause;
-  `on_disconnected` reports the existing close result, without a dedicated watchdog reason.
-  Disconnecting and disconnected ignore both canceled waits and already queued expiries.
-  Other states assert, or log and return when assertions are disabled: the idle timer starts only
-  after a successful handshake, and sessions are never reused.
-- **`shutdown()`** — internal close request from idle timer or handled write failure. Requires
+- **`shutdown()`** — internal close request after a handled write failure. Requires
   connected status, then sets `disconnecting`, cancels enabled timers and starts `async_close(normal)`.
   Closing uses the existing WebSocket timeout settings; no TCP deadline is enabled here.
   Any other status is a precondition violation. All callers enforce the connected-state requirement.
 
-Timer handlers ignore cancellation and completions delivered after disconnection. `shutdown()` has no public
-API and does not cancel connection attempts.
-Timer and ping completions accept only connected, disconnecting or disconnected, allowing
-cancellation completions after shutdown or `close()`. The handlers enforce this through
-their switch's default branch.
+Control-Ping timer callbacks act only while connected; session state guards also suppress late Ping-write
+completions after shutdown or `close()`. `shutdown()` has no public API and does not cancel
+connection attempts.
 
-The TCP deadline uses `params().async_operation_timeout_sec` when `on_resolve` starts TCP
-connect; it also covers the subsequent TLS handshake. Socket buffer sizes are read from
-parameters after TCP connects. WebSocket handshake/close timeouts use Beast's client defaults.
-Each active Ping send independently reuses `async_operation_timeout_sec` through its probe
-timer; the underlying TCP deadline remains disabled after TLS setup.
-
-Transport/protocol timeouts arrive through the relevant completion's error code; they are
-not a separate callback or an unconditional transition to `conn_failed`.
+The connection deadline uses `params().async_operation_timeout_sec`, starting before DNS
+resolution and ending on WebSocket handshake success, failure or cancellation. It uses
+[`nom::timer`](timer.md), with a weak session capture. Socket buffer sizes are applied after
+TCP connects. Beast's TCP and opening-handshake deadlines are disabled; its client close
+timeout is enabled after the successful upgrade. Idle timeout and automatic Pings remain disabled.
+Each active Ping write independently reuses `async_operation_timeout_sec` through its probe timer.
 
 ### Emitted delegate events
 
@@ -405,16 +397,15 @@ These are outputs of the current machine, shown as actions on edges:
   prevent asynchronous operations from overlapping. The receive-callback resubscription cases
   passed; [WS-03](../../core/asio_comm/ws_current_work.md#ws-03) is closed as unconfirmed. Conditional
   buffering and a send gate are deferred pending a reproducible failure or an explicit API requirement.
-- **Liveness.** `receive_watchdog` is disabled by default. Enabling it can close a healthy but
-  quiet connection. Only complete data messages refresh it; control Pings/Pongs and partial
-  fragments do not. Application heartbeats still count as data messages; distinguishing useful
-  market data requires exchange-adapter participation.
-  Idle detection remains owned by this client; Beast's idle timeout and
-  automatic idle pings stay disabled. The periodic watchdog policy is development-complete;
-  live validation remains pending in [WS-06](../../core/asio_comm/ws_current_work.md#ws-06).
-  Generation-based cancellation is postponed to the shared WebSocket/HTTP timer class.
-  DNS has no library deadline; an overall
-  connection deadline remains WIP.
+- **Liveness and data freshness.** Active/passive control-Ping policies monitor connection
+  availability. Data-freshness monitoring belongs to the subscriber, which can distinguish
+  market updates from application heartbeats, acknowledgements and other messages. Use a
+  [subscriber-owned timer](timer.md), refresh it only for relevant data, and choose the timeout
+  and close/reconnect policy there. The WebSocket client does not close merely because data is
+  quiet; Beast's idle timeout and automatic idle Pings remain disabled.
+  Live Ping/network-loss validation remains pending in [WS-06](../../core/asio_comm/ws_current_work.md#ws-06).
+  Active/passive deadlines use generation-based cancellation through `nom::timer`.
+  The connection attempt has a separate DNS-through-upgrade deadline, including when both Ping policies are disabled.
 - **Exceptions after connection — deferred.** Read/ping/timer initiation, control-callback
   installation and graceful-close initiation can throw with other operations pending and the
   session still connected or disconnecting. These paths have no automatic notification/cleanup
@@ -430,6 +421,10 @@ The existing tests cover:
   and close/destruction with queued completions either drained or discarded by context destruction.
 - Injected allocation failures during connection initiation, plus an allocation guard while
   closing pending setup and suppressing its queued completion.
+- Connection-deadline expiry during delayed DNS (Linux test-executable resolver interposition),
+  blocked TCP connect (Linux loopback accept backlog), TLS and WebSocket upgrade. A combined-stage
+  delay verifies one overall budget. Success, rejected upgrade, close/destruction, late cancellation,
+  move construction/assignment and reconnect check timer lifetime and single-error delivery.
 - Local TLS send/echo, fragmented messages with interleaved ping/pong, server-pushed data,
   peer close, partial-frame EOF, close from a data callback, and certificate/hostname rejection.
 - Validated headers/User-Agent settings, retained/reset parameters on reconnect, three successive
@@ -461,5 +456,5 @@ The existing tests cover:
   delayed callback delivery and event ordering, blocked Ping sends and recovery, disabled probing,
   terminal cancellation during interval and response waits, move, and reconnect.
 
-Live Ping/data validation, application-specific data classification, and the deferred
-write/exception cases above remain pending. The agreed receive-watchdog implementation is complete.
+Live Ping/network-loss validation and the deferred write/exception cases above remain pending.
+Subscriber data classification and freshness monitoring are application responsibilities.

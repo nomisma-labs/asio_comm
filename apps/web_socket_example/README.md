@@ -60,10 +60,10 @@ params.headers = {{.name = "Authorization", .value = "Bearer " + token}};
 params.agent_name = "my-feed-client/1.0";
 params.active_ping = nom::ws_params::client_ping_probe{};
 client.update_params(params);
-client.connect(callbacks);
+client.connect(delegate);
 ```
 
-`callbacks` is a `nom::web_socket::delegate` receiving `nom::event::on_connected`,
+`delegate` is a `nom::web_socket::ws_delegate` receiving `nom::event::on_connected`,
 `nom::event::ws_data`, `nom::event::on_disconnected`, and `nom::event::network_error`.
 `ws_params::validate()` returns `std::expected<void, std::string>` with the first invalid field's
 diagnostic. `update_params()` performs the same validation and throws `std::invalid_argument`
@@ -79,7 +79,6 @@ Serialize updates with client calls and completion handlers. Settings persist ac
 | `passive_ping` | `std::nullopt` | Expect a server control Ping within `ping_timeout_sec` (default 20) after handshake and after each Ping. A missed deadline closes the transport and reports a timeout through `on_disconnected`. Data and Pongs do not refresh it. |
 | `active_ping` | `std::nullopt` | Waits `ping_period_sec` (default 20) before each probe. The send uses `async_operation_timeout_sec`; successful write completion starts `pong_timeout_sec` (default 20). A Pong then starts the next interval; payload mismatch logs a warning. A Pong during the interval or send fails the probe. Missed deadlines disconnect with a reason. |
 | `async_operation_timeout_sec` | `30` | The TCP-connect/TLS setup budget and, independently, each active Ping send deadline |
-| `receive_watchdog` | `std::nullopt` | Optional `receive_data_watchdog`; `timeout_sec` defaults to 30 when enabled. Tracks complete data messages from connection onward; control Pings/Pongs do not refresh it. Checks every `timeout_sec` and starts graceful shutdown when data inactivity exceeds that duration, without grace or tolerance. The watchdog log records the cause. |
 | `socket_send_buf_size`, `socket_recv_buf_size` | `65536` bytes each | Socket options applied after TCP connect |
 
 Accepted settings apply to the next connection attempt and remain fixed while it is active.

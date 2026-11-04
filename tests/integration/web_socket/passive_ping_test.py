@@ -20,7 +20,7 @@ from loopback_test import handshake, read_frame
 
 CASES = ('silent', 'traffic', 'refresh', 'disabled', 'peer_close', 'read_error',
          'close_connected', 'close_after_ping', 'late_handshake', 'reconnect', 'move',
-         'slow_handler', 'graceful')
+         'slow_handler')
 
 
 def await_disconnect(connection):
@@ -73,12 +73,6 @@ def run_case(client, context, certificate, case):
                                 connection.unwrap().close()
                                 return
                             elif case == 'read_error':
-                                return
-                            elif case == 'graceful':
-                                opcode, payload = read_frame(connection)
-                                assert opcode == 0x88, 'receive watchdog must start graceful close'
-                                connection.sendall(bytes((0x88, len(payload))) + payload)
-                                connection.unwrap().close()
                                 return
                             elif case in ('disabled', 'close_after_ping', 'late_handshake') or attempt == 1:
                                 ping(connection, b'probe')

@@ -1,29 +1,61 @@
-**Communication execution and simulation proposal — 2026-10-31**
+**Communication work status and execution/simulation proposal — updated 2026-11-05**
+
+<a id="https-timer-completion"></a>
+
+**HTTPS and Timer — COMPLETE (2026-11-05)**
+
+The agreed implementation, examples and local validation are complete. Remaining TODOs are
+deferred follow-up work and do not keep this scope open.
+
+| Component | Completed scope |
+| --- | --- |
+| [`nom::https`](../../docs/asio_comm/https.md) | Verified TLS HTTP/1.1; validated requests/parameters; bounded FIFO with one active request/response exchange; owned request storage and response IDs; explicit lifecycle/deadline handlers; silent client close and internal graceful shutdown; moves and callback re-entry. [`https_example`](../../apps/https_example/README.md) demonstrates Assembly/relay integration. |
+| [`nom::timer`](../../docs/asio_comm/timer.md) | One-shot monotonic scheduling; generation-safe cancel/rearm; parameterless callbacks; lifetime-safe completion and moves; fatal diagnostics for unexpected backend errors. [`timer_example`](../../apps/timer_example/README.md) demonstrates rearming through Assembly/relay. HTTPS deadlines, WebSocket connection/Ping deadlines and application timers use it. |
+
+**Deferred follow-ups**
+
+| Area / source | Remaining work |
+| --- | --- |
+| HTTPS sending — [`https.cpp`](https.cpp) | Synchronous send and its queue policy; diagram of the asynchronous sending workflow; request pipelining with FIFO response association; batching complete HTTP requests into one write. These remain separate TODOs. |
+| Exception audit — [WS-08](ws_current_work.md#ws-08) | Apply the agreed event/exception policy consistently to WebSocket and HTTPS and extend fault tests. Escaping transition/delegate exceptions are fatal: the outermost application handler logs and exits; no recovery/state guarantee is promised. |
+| Timer logging — [`timer.cpp`](timer.cpp) | Replace the existing emergency logging with `spd_logger`'s `FATAL` helper when available. Fatal behavior is already implemented. |
+| Execution and simulation | Backend-neutral executor/clock/source contracts and virtual time remain the separate proposal below. |
+
+**Validation refreshed — 2026-11-05:** HTTPS and Timer unit suites and the HTTPS TLS loopback
+suite pass in Debug and ASan/UBSan builds (three suites in each). Both examples rebuild;
+the loopback suite exercises repeated HTTPS requests, and the Debug Timer example delivers
+the requested three ticks. Documentation links and `git diff --check` pass.
+
+Local tests cover the current contract; public exchange interoperability remains future
+integration validation. Completion does not claim live exchange/order-execution validation
+or implementation of the deferred features.
+
+**Execution and simulation proposal**
 
 Introduce Nomisma-owned execution, time, and event-source contracts so the same application
 logic can run with live communication or deterministic replay. Start with `nom::timer`, a
 small executor handle, and an engine that supplies time and dispatches work. Implement both
 an Asio backend and a virtual-time backend early, before expanding the abstraction.
 
-This is a design proposal, not an implemented API. Names follow the repository's `snake_case`
-convention: the EventEngine and EventSource concepts below are `event_engine` and `event_source`.
+The engine and simulation contracts below remain a design proposal. Backend-neutral construction
+and virtual time are not yet implemented. Names follow the repository's `snake_case` convention:
+the EventEngine and EventSource concepts below are `event_engine` and `event_source`.
 The current WebSocket cleanup, defects, and validation plan remain in
 [ws_current_work.md](ws_current_work.md). This document owns the broader execution and
 simulation design; WebSocket-specific work should link here instead of duplicating it.
 
 **1. Why wrappers need a shared contract**
 
-Current application code owns `boost::asio::io_context`, passes `boost::asio::any_io_executor`,
-and uses `boost::asio::steady_timer` for OKEx text heartbeats. These are explicit application
-dependencies, declared by their includes and
-build targets. Timer callbacks may name `boost::system::error_code` directly. The WebSocket
-module does not supply these utility names. Future wrappers replace application dependencies
-through their own module rather than turning the WebSocket implementation into a utility provider.
-+
+Current application code owns `boost::asio::io_context` and passes `boost::asio::any_io_executor`.
+These are explicit application dependencies, declared by their includes and build targets.
+Application heartbeats, subscription pacing and integration-test deadlines use `nom::timer`
+with parameterless callbacks. The timer wrapper is available through `nom.asio_comm`;
+neutral execution and time wrappers remain future work.
+
 There are two additional dependencies that a timer wrapper alone would leave intact:
 
 - [web_socket.cpp](web_socket.cpp) calls `std::chrono::steady_clock::now()` throughout its
-  event and idle handling. A virtual timer cannot make code using a different clock deterministic.
+  events and control-Ping handling. A virtual timer cannot make code using a different clock deterministic.
 - WebSocket delegates receive a concrete `web_socket&`, and feeders relay borrowed payloads
   synchronously. A simulated source needs a compatible control/event contract and payload lifetime.
 
@@ -166,47 +198,27 @@ and random generator.
 
 **5. Timer cancellation and lifetime**
 
-**POSTPONED — shared WebSocket/HTTP timer class:** `WS-TIMER-GENERATION` is tracked here as
-part of the larger `nom::timer` task for both protocols. It does not block completion of the
-current WebSocket Ping and receive-watchdog work. Implement the common timer contract and
-migrate its consumers together; no isolated WebSocket generation workaround is planned.
+**COMPLETE — Asio-backed timer and example (2026-11-04).** The
+[timer contract](../../docs/asio_comm/timer.md) covers one-shot scheduling on `steady_clock`,
+parameterless expiry callbacks, generation-safe cancellation, callback lifetime and `noexcept`
+moves. Cancellation and rearming suppress obsolete completions, including success already
+queued for delivery. Current-generation completion errors log and terminate; setup and callback
+exceptions retain their documented propagation rules. HTTPS uses the timer for connection,
+request and shutdown deadlines; WebSocket uses it for connection and active/passive Ping waits. The example
+demonstrates periodic rearming through Assembly/relay.
 
-Prefer a one-shot timer with one active generation. `arm_after()` computes a deadline using
-the engine clock; periodic behavior initially rearms explicitly. A later periodic helper must
-choose fixed-delay or fixed-rate scheduling and a missed-deadline policy.
+Validation covers cancellation after queuing, delayed dispatch beyond a replacement deadline,
+callback destruction/reentry, move assignment over queued expiry, moved-from reuse, executor
+preservation and independent timers on separate threads. Debug and ASan/UBSan tests passed;
+debugger fault injection verified both fatal diagnostic outputs and termination.
 
-Two viable cancellation contracts are:
+**COMPLETE — `WS-TIMER-GENERATION`:** WebSocket active/passive Ping waits now use `nom::timer`;
+expiry-time guards and session-level cancellation/error handling have been removed. Protocol
+timeouts still disconnect; unexpected timer errors follow the shared fatal policy.
 
-- Completion-style: every accepted arm completes with expired, canceled, or failed. This is
-  familiar to asynchronous I/O users but exposes cancellation callbacks to every consumer.
-- Invalidation-style: cancel/rearm suppresses delivery for the obsolete generation; only
-  expiry or failure is delivered. This is simpler for current deadline/heartbeat callers.
-
-Recommend invalidation-style for `nom::timer`. After `cancel()` returns on its serial domain,
-no callback for the invalidated generation may begin. A callback already executing cannot be
-undone. Cancellation is idempotent; a timer destructor invalidates callbacks without invoking
-user code. Construction, arm/rearm, cancel, and destruction must be serialized with dispatch
-in the initial version. Cross-thread destruction is not implicitly made safe by an executor.
-
-Implement that guarantee with internal state and generation checks at delivery, not solely by
-forwarding to Asio cancellation. Asio can still deliver a successful completion that was already
-queued when cancellation occurred. Internal canceled completions may drain after the public
-timer is gone, but must not dereference it or its callback owner.
-[Asio timer cancellation](https://www.boost.org/doc/libs/latest/doc/html/boost_asio/reference/basic_waitable_timer/cancel.html).
-
-Concrete migration reason: [`WS-TIMER-GENERATION`](ws_current_work.md#ws-06) marks the active
-and passive Ping handlers' `now() < expiry()` guards. These compare time, not callback identity:
-if dispatch resumes after even the rearmed deadline, an obsolete callback can process the
-current state. Replace these guards when adopting `nom::timer`. Add a contract case that queues
-an old expiry, rearms, then delays dispatch beyond the new deadline: the old generation must
-not reach its consumer, while the current due generation must be delivered once.
-
-Use a Nomisma timer event/result for expiry and unexpected failure, with due/delivery timestamps
-and a small documented error category. Normal cancellation need not become an error event.
-Preserve backend diagnostics when useful without requiring application handlers to name a
-Boost type. Do not create an exhaustive universal error framework before concrete failures
-require it. Allocation/initiation failure must leave the timer in a defined state; begin with
-a documented throwing setup API and nonthrowing best-effort cancellation/destruction.
+**Separate work:** backend-neutral execution, an engine clock and simulated time remain the broader
+proposal below. Consolidating emergency logging into `spd_logger`'s planned `FATAL` macro is
+logger integration cleanup, not unfinished timer behavior.
 
 **6. Event sources and simulation boundaries**
 
@@ -271,8 +283,8 @@ notifications, if promised, have completed. A future threaded runner also has to
 workers; that concern stays outside the basic timer/source abstractions.
 
 Start with a nonthrowing user-callback contract and defined engine failure reporting. If an
-unexpected callback exception escapes, mark the run failed and propagate to the runner after
-establishing a safe stop path; do not silently continue a partially executed simulation event.
+unexpected exception escapes an event transition, propagate to the outermost runner to log
+and exit; do not resume a partially executed simulation or promise a recoverable state.
 Queue saturation, setup failure, and stopped-engine submissions need explicit results or
 documented exceptions. Do not claim a blanket `noexcept` API while operations can allocate.
 
@@ -313,6 +325,9 @@ contracts. A separate reusable execution component is a plausible destination; c
 new repository or reorganizing shared build machinery is not a prerequisite for this proposal.
 
 **9. Incremental implementation path**
+
+These steps concern the engine and simulation layer; the completed Asio-backed timer is its
+starting implementation, not an outstanding timer task.
 
 | Step | Work | Acceptance evidence |
 | --- | --- | --- |
@@ -359,5 +374,5 @@ Before redesigning its timers and timestamp types, settle steps A–C here so th
 the chosen engine contract. The current blocking send still needs its own asynchronous-write
 and backpressure work; an engine wrapper cannot make a blocking operation nonblocking.
 
-Validation for this document is source review, contract consistency, and local-link checks.
-No new runtime implementation, performance result, or simulation correctness claim is implied.
+Validation of the engine/simulation proposal is source review, contract consistency, and
+local-link checks. Its unimplemented contracts imply no performance or simulation correctness claim.

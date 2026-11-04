@@ -35,8 +35,8 @@ One `subscribe` request contains each selected channel and `instId`. `books` sup
 initial 400-level snapshot followed by incremental updates. Symbols use `BASE-QUOTE` syntax.
 The endpoint uses port 443. The executable keeps the requested `okex` name.
 
-An application timer sends text `ping` every 20 seconds. Text `pong` replies are logged and
-count as receive activity for the client's idle timer. The timer is canceled when the feed ends.
+An application timer sends text `ping` every 20 seconds. Text `pong` replies are logged;
+they do not establish market-data freshness. The ping timer is canceled when the feed ends.
 See the [OKX API guide](https://www.okx.com/docs-v5/en/#overview-websocket).
 
 Every incoming payload is logged unchanged, including acknowledgements and API errors. The app

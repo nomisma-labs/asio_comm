@@ -8,8 +8,6 @@
 
 #include <boost/asio/any_io_executor.hpp>
 #include <boost/asio/io_context.hpp>
-#include <boost/asio/steady_timer.hpp>
-#include <boost/system/error_code.hpp>
 
 import std;
 import nom.asio_comm;
@@ -28,7 +26,7 @@ int main(int argc, char** argv)
         auto params = client.params();
         params.active_ping = nom::ws_params::client_ping_probe{};
         client.update_params(params);
-        boost::asio::steady_timer deadline(io);
+        nom::timer deadline(io.get_executor());
         unsigned connected = 0;
         unsigned disconnected = 0;
         unsigned rejected_updates = 0;
@@ -61,7 +59,7 @@ int main(int argc, char** argv)
             }
             return false;
         };
-        const nom::web_socket::delegate callbacks{
+        const nom::web_socket::ws_delegate callbacks{
             [&](nom::web_socket&, const auto& event)
             {
                 using event_type = std::remove_cvref_t<decltype(event)>;
@@ -141,13 +139,7 @@ int main(int argc, char** argv)
                 }
             }};
 
-        deadline.expires_after(std::chrono::seconds(5));
-        deadline.async_wait(
-            [&](const boost::system::error_code& error)
-            {
-                if (!error)
-                    fail("Timed out waiting for disconnect completion");
-            });
+        deadline.arm_after(std::chrono::seconds(5), [&] { fail("Timed out waiting for disconnect completion"); });
         client.connect(callbacks);
         io.run();
         return !failed && saw_disconnecting && connected == 1 && disconnected == 1 && rejected_updates == 2 ? 0 : 1;

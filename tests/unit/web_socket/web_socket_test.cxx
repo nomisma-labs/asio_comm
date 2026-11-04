@@ -67,7 +67,7 @@ TEST_CASE("Closing or destroying while resolving suppresses queued events")
     nom::init_logger(nom::main_logger);
     boost::asio::io_context io;
     unsigned calls = 0;
-    const nom::web_socket::delegate callbacks{[&](nom::web_socket&, const auto&) { ++calls; }};
+    const nom::web_socket::ws_delegate callbacks{[&](nom::web_socket&, const auto&) { ++calls; }};
     {
         nom::web_socket client(io.get_executor(), nom::url("wss://127.0.0.1:1/"));
         const auto initial_id = client.session_id();
@@ -102,7 +102,7 @@ TEST_CASE("Queued session handlers can be destroyed without running after the ow
         boost::asio::io_context io;
         {
             nom::web_socket client(io.get_executor(), nom::url("wss://127.0.0.1:1/"));
-            const nom::web_socket::delegate callbacks{[&](nom::web_socket&, const auto&) { ++calls; }};
+            const nom::web_socket::ws_delegate callbacks{[&](nom::web_socket&, const auto&) { ++calls; }};
             client.connect(callbacks);
             client.connect(callbacks);
         }
@@ -122,11 +122,11 @@ TEST_CASE("Pending sessions retain callbacks until canceled operations are relea
             nom::web_socket client(io.get_executor(), nom::url("wss://127.0.0.1:1/"));
             auto lifetime = std::make_shared<unsigned>(0);
             callback_lifetime = lifetime;
-            client.connect(nom::web_socket::delegate{[lifetime, &calls](nom::web_socket&, const auto&)
-                                                     {
-                                                         ++*lifetime;
-                                                         ++calls;
-                                                     }});
+            client.connect(nom::web_socket::ws_delegate{[lifetime, &calls](nom::web_socket&, const auto&)
+                                                        {
+                                                            ++*lifetime;
+                                                            ++calls;
+                                                        }});
         }
         CHECK_FALSE(callback_lifetime.expired());
 
@@ -165,7 +165,7 @@ TEST_CASE("Move construction transfers an unused session and leaves a usable sou
     CHECK(source.session_id() != original_id);
 
     unsigned calls = 0;
-    const nom::web_socket::delegate callbacks{[&](nom::web_socket&, const auto&) { ++calls; }};
+    const nom::web_socket::ws_delegate callbacks{[&](nom::web_socket&, const auto&) { ++calls; }};
     destination.connect(callbacks);
     source.connect(callbacks);
     destination.close();
@@ -180,7 +180,7 @@ TEST_CASE("Move assignment cancels the destination attempt and preserves both ho
     boost::asio::io_context io;
     boost::asio::io_context destination_io;
     unsigned calls = 0;
-    const nom::web_socket::delegate callbacks{[&](nom::web_socket&, const auto&) { ++calls; }};
+    const nom::web_socket::ws_delegate callbacks{[&](nom::web_socket&, const auto&) { ++calls; }};
     nom::web_socket source(io.get_executor(), nom::url("wss://127.0.0.1:1/source"));
     nom::web_socket destination(destination_io.get_executor(), nom::url("wss://127.0.0.1:1/destination"));
     source.connect(callbacks);
@@ -223,7 +223,7 @@ TEST_CASE("Moving terminal sessions preserves failure status and usable owner li
     nom::init_logger(nom::main_logger);
     boost::asio::io_context io;
     unsigned calls = 0;
-    const nom::web_socket::delegate callbacks{[&](nom::web_socket&, const auto&) { ++calls; }};
+    const nom::web_socket::ws_delegate callbacks{[&](nom::web_socket&, const auto&) { ++calls; }};
     nom::web_socket source(io.get_executor(), nom::url("wss://127.0.0.1:1/"));
     source.connect(callbacks);
     source.close();

@@ -3,8 +3,10 @@
 - [kit/](kit/README.md): the docs every Nomisma repo shares: build, conventions, recipes, new repos
   and syncing, and the agent rules.
 - [WebSocket](asio_comm/web_socket.md): state machine, events, usage constraints and validation coverage.
-- [Active Ping state machine](../core/asio_comm/ping_work.md#active-ping-state-machine): probe statuses,
-  deadlines and callback ordering.
+- [HTTPS](asio_comm/https.md): request queuing, TLS, deadlines and lifecycle.
+- [Timer](asio_comm/timer.md): scheduling, generation-safe cancellation and callback lifetime.
+- [WebSocket Ping and heartbeats](asio_comm/web_socket_ping.md): control-Ping design, probe state
+  machine and exchange heartbeat policies.
 - [Binance Spot feeder](../apps/binance/binance_spot_feeder/README.md): market-data subscriptions and logging.
 - [Binance Spot resubscription test](../apps/binance/binance_spot_resubscribe_test/README.md): receive-callback
   sends and additional-symbol subscriptions on one connection.

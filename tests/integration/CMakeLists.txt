@@ -15,14 +15,14 @@ if(nom_build_tests AND TARGET web_socket_example)
             DEPS Boost::headers nom::asio_comm nom::spd_logger)
         nom_app(asio_comm_move_client IMPORT_STD SOURCES web_socket/move_test.cxx
             DEPS Boost::headers nom::asio_comm nom::spd_logger)
-        nom_app(asio_comm_receive_watchdog_client IMPORT_STD SOURCES web_socket/receive_watchdog_test.cxx
-            DEPS Boost::headers nom::asio_comm nom::spd_logger)
         nom_app(asio_comm_passive_ping_client IMPORT_STD SOURCES web_socket/passive_ping_test.cxx
             DEPS Boost::headers nom::asio_comm nom::spd_logger)
         nom_app(asio_comm_active_ping_client IMPORT_STD SOURCES web_socket/active_ping_test.cxx
             DEPS Boost::headers nom::asio_comm nom::spd_logger)
         nom_app(asio_comm_large_messages_client IMPORT_STD SOURCES web_socket/large_messages_test.cxx
             DEPS Boost::headers nom::asio_comm nom::spd_logger)
+        nom_app(asio_comm_connection_deadline_client IMPORT_STD SOURCES web_socket/connection_deadline_test.cxx
+            DEPS Boost::headers nom::asio_comm nom::spd_logger ${CMAKE_DL_LIBS})
     endblock()
 
     find_package(Python 3.10 REQUIRED COMPONENTS Interpreter)
@@ -39,7 +39,6 @@ if(nom_build_tests AND TARGET web_socket_example)
             --client $<TARGET_FILE:web_socket_example>
             --headers-client $<TARGET_FILE:asio_comm_headers_client>
             --move-client $<TARGET_FILE:asio_comm_move_client>
-            --receive-watchdog-client $<TARGET_FILE:asio_comm_receive_watchdog_client>
             --disconnecting-client $<TARGET_FILE:asio_comm_disconnecting_client> --openssl ${openssl_executable}
             ${binance_feeder_args})
     set_tests_properties(${PROJECT_NAME}_web_socket_loopback PROPERTIES LABELS integration TIMEOUT 60)
@@ -51,6 +50,10 @@ if(nom_build_tests AND TARGET web_socket_example)
         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/web_socket/active_ping_test.py
             --client $<TARGET_FILE:asio_comm_active_ping_client> --openssl ${openssl_executable})
     set_tests_properties(${PROJECT_NAME}_active_ping PROPERTIES LABELS integration TIMEOUT 60)
+    add_test(NAME ${PROJECT_NAME}_connection_deadline
+        COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/web_socket/connection_deadline_test.py
+            --client $<TARGET_FILE:asio_comm_connection_deadline_client> --openssl ${openssl_executable})
+    set_tests_properties(${PROJECT_NAME}_connection_deadline PROPERTIES LABELS integration TIMEOUT 45)
 endif()
 
 if(nom_build_tests AND TARGET binance_spot_resubscribe_test)
@@ -139,4 +142,22 @@ if(nom_build_tests)
                 --openssl ${openssl_executable} ${exchange_app_args})
         set_tests_properties(${PROJECT_NAME}_exchange_apps PROPERTIES LABELS integration TIMEOUT 90)
     endif()
+endif()
+
+if(nom_build_tests AND TARGET https_example)
+    block(SCOPE_FOR VARIABLES)
+        set(nom_install OFF)
+        nom_app(asio_comm_https_client IMPORT_STD SOURCES https/client_test.cxx
+            DEPS Boost::headers nom::asio_comm nom::spd_logger)
+        nom_app(asio_comm_https_move_client IMPORT_STD SOURCES https/move_test.cxx
+            DEPS Boost::headers nom::asio_comm nom::spd_logger)
+    endblock()
+    find_package(Python 3.10 REQUIRED COMPONENTS Interpreter)
+    find_program(openssl_executable openssl REQUIRED)
+    add_test(NAME ${PROJECT_NAME}_https_loopback
+        COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/https/loopback_test.py
+            --client $<TARGET_FILE:asio_comm_https_client> --example $<TARGET_FILE:https_example>
+            --move-client $<TARGET_FILE:asio_comm_https_move_client>
+            --openssl ${openssl_executable})
+    set_tests_properties(${PROJECT_NAME}_https_loopback PROPERTIES LABELS integration TIMEOUT 60)
 endif()

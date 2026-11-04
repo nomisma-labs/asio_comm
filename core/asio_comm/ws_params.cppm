@@ -13,7 +13,6 @@ export namespace nom
         static constexpr unsigned default_async_operation_timeout_sec = 30;
         static constexpr unsigned default_ping_period_sec = 20;
         static constexpr unsigned default_ping_timeout_sec = 20;
-        static constexpr unsigned default_receive_data_timeout_sec = 30;
         static constexpr unsigned default_socket_send_buf_size = 64 * 1024;
         static constexpr unsigned default_socket_recv_buf_size = 64 * 1024;
         static constexpr unsigned default_max_message_size = 16 * 1024 * 1024;
@@ -49,8 +48,6 @@ export namespace nom
         // TODO IDs and stage definitions: ws_current_work.md.
         // DEV-DONE/LIVE-TEST-PENDING TODO[WS-PING] (stage WS-06):
         // Enforce passive Ping and active Pong deadlines.
-        // DEV-DONE/LIVE-TEST-PENDING TODO[WS-IDLE] (stage WS-06):
-        // Review the receive watchdog timer and test it properly (perhaps with a local WebSocket server).
 
         // PARTIAL TODO[WS-OP-TIMEOUT] (stage WS-06):
         // Review async operation timeouts; reproduce a case when a timeout is triggered.
@@ -71,22 +68,12 @@ export namespace nom
             unsigned pong_timeout_sec = default_ping_timeout_sec;
         };
         // Only server control Pings refresh passive_ping; data and Pongs do not.
-        // Active probes run one at a time, independently of passive_ping and receive_watchdog.
+        // Active probes run one at a time, independently of passive_ping.
         std::optional<server_ping_watchdog> passive_ping{std::nullopt};
         std::optional<client_ping_probe> active_ping{std::nullopt};
 
-        // TCP connect/TLS setup budget, and the separate deadline for each active Ping write.
+        // Overall DNS/TCP/TLS/WebSocket connection budget, and the separate deadline for each active Ping write.
         unsigned async_operation_timeout_sec{default_async_operation_timeout_sec};
-        // Disabled by default. An enabled watchdog is independent of the Ping settings.
-        // Track complete data messages only; control Ping/Pong frames do not refresh this watchdog.
-        // Check every timeout_sec seconds and close when data inactivity exceeds timeout_sec.
-        // Periodic checks are intentional; application-level useful-data classification belongs to the caller.
-        struct receive_data_watchdog
-        {
-            unsigned timeout_sec{default_receive_data_timeout_sec};
-        };
-        std::optional<receive_data_watchdog> receive_watchdog{std::nullopt};
-
         [[nodiscard]] std::expected<void, std::string> validate() const;
     };
 

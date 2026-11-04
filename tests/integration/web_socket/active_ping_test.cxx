@@ -7,8 +7,6 @@
 
 #include <boost/asio/any_io_executor.hpp>
 #include <boost/asio/io_context.hpp>
-#include <boost/asio/steady_timer.hpp>
-#include <boost/system/error_code.hpp>
 
 import std;
 import nom.asio_comm;
@@ -25,8 +23,7 @@ int main(int argc, char** argv)
         const bool expect_timeout = mode == "silent" || mode == "traffic" || mode == "move" || mode == "reconnect";
         const bool expect_send_timeout = mode == "send_timeout";
         const bool expect_unexpected_pong = mode == "unsolicited" || mode == "duplicate";
-        const bool expect_peer_close =
-            mode.starts_with("peer_close") || mode.starts_with("read_error") || mode == "graceful";
+        const bool expect_peer_close = mode.starts_with("peer_close") || mode.starts_with("read_error");
         const bool long_interval = mode == "peer_close_interval" || mode == "read_error_interval";
         const bool long_deadline = expect_peer_close || mode == "close_pending";
         boost::asio::io_context io;
@@ -38,10 +35,9 @@ int main(int argc, char** argv)
         if (mode == "traffic")
         {
             params.passive_ping = nom::ws_params::server_ping_watchdog{.ping_timeout_sec = 2};
-            params.receive_watchdog = nom::ws_params::receive_data_watchdog{.timeout_sec = 2};
         }
-        if (mode == "graceful")
-            params.receive_watchdog = nom::ws_params::receive_data_watchdog{.timeout_sec = 2};
+        if (mode == "destroy_pending")
+            params.passive_ping = nom::ws_params::server_ping_watchdog{.ping_timeout_sec = 10};
         if (expect_send_timeout || mode == "send_unblocked")
         {
             params.async_operation_timeout_sec = 2;
@@ -51,7 +47,7 @@ int main(int argc, char** argv)
 
         std::optional<nom::web_socket> moved;
         nom::web_socket* owner = &client;
-        boost::asio::steady_timer deadline(io);
+        nom::timer deadline(io.get_executor());
         nom::network_timestamp connected_at{};
         unsigned connected = 0;
         unsigned disconnected = 0;
@@ -69,8 +65,8 @@ int main(int argc, char** argv)
             failed = true;
             stop();
         };
-        nom::web_socket::delegate callbacks;
-        callbacks = nom::web_socket::delegate{
+        nom::web_socket::ws_delegate callbacks;
+        callbacks = nom::web_socket::ws_delegate{
             [&](nom::web_socket& connection, const auto& event)
             {
                 if (&connection != owner)
@@ -83,7 +79,7 @@ int main(int argc, char** argv)
                 {
                     ++connected;
                     connected_at = event.ts;
-                    if (mode == "move")
+                    if (mode == "move" || mode == "destroy_pending")
                     {
                         moved.emplace(std::move(client));
                         owner = &*moved;
@@ -145,25 +141,29 @@ int main(int argc, char** argv)
                     if (event.sv_data() == "finish")
                     {
                         finished = true;
-                        stop();
+                        if (mode == "destroy_pending")
+                        {
+                            moved.reset();
+                            owner = &client;
+                            deadline.cancel();
+                        }
+                        else
+                            stop();
                     }
                     else if (event.sv_data() == "stall" && mode == "queued")
                         std::this_thread::sleep_for(std::chrono::milliseconds(2200));
-                    else if (event.sv_data() == "late" && mode == "late")
+                    else if (event.sv_data() == "late" && (mode == "late" || mode == "late_rearm"))
                         std::this_thread::sleep_for(std::chrono::milliseconds(2200));
+                    else if (event.sv_data() == "after_pong" && mode == "late_rearm")
+                        // The Pong has replaced its wait with the interval. Delay past that new deadline too.
+                        std::this_thread::sleep_for(std::chrono::milliseconds(1200));
                     else if (event.sv_data() != "data" || mode != "traffic")
                         fail("Unexpected active Ping test data");
                 }
                 else if constexpr (std::same_as<event_type, nom::event::network_error>)
                     fail(event.description);
             }};
-        deadline.expires_after(std::chrono::seconds(12));
-        deadline.async_wait(
-            [&](const boost::system::error_code& error)
-            {
-                if (!error)
-                    fail("Active Ping test did not finish");
-            });
+        deadline.arm_after(std::chrono::seconds(12), [&] { fail("Active Ping test did not finish"); });
         client.connect(callbacks);
         if (mode == "send_completion_delay")
         {

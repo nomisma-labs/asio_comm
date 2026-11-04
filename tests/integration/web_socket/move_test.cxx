@@ -8,8 +8,6 @@
 #include <boost/asio/any_io_executor.hpp>
 #include <boost/asio/io_context.hpp>
 #include <boost/asio/post.hpp>
-#include <boost/asio/steady_timer.hpp>
-#include <boost/system/error_code.hpp>
 
 import std;
 import nom.asio_comm;
@@ -32,11 +30,10 @@ int main(int argc, char** argv)
         params.headers = {{.name = "X-Move", .value = "source"}};
         params.active_ping = nom::ws_params::client_ping_probe{};
         params.active_ping->ping_period_sec = 1;
-        params.receive_watchdog = nom::ws_params::receive_data_watchdog{.timeout_sec = 2};
         source.update_params(params);
         std::optional<nom::web_socket> destination;
         nom::web_socket* expected_owner = &source;
-        boost::asio::steady_timer deadline(io);
+        nom::timer deadline(io.get_executor());
         unsigned connected = 0;
         unsigned received = 0;
         bool failed = false;
@@ -59,8 +56,8 @@ int main(int argc, char** argv)
             if (assign)
             {
                 destination.emplace(io.get_executor(), address);
-                destination->connect(nom::web_socket::delegate{[&](nom::web_socket&, const auto&)
-                                                               { fail("Replaced session notified its old owner"); }});
+                destination->connect(nom::web_socket::ws_delegate{
+                    [&](nom::web_socket&, const auto&) { fail("Replaced session notified its old owner"); }});
                 const auto replaced_id = destination->session_id();
                 *destination = std::move(source);
                 if (source.status() != nom::ws_status::conn_failed || source.session_id() != replaced_id)
@@ -77,7 +74,7 @@ int main(int argc, char** argv)
                 destination->params().headers.front().value != "source")
                 fail("Move lost session identity or parameters");
         };
-        const nom::web_socket::delegate callbacks{
+        const nom::web_socket::ws_delegate callbacks{
             [&](nom::web_socket& connection, const auto& event)
             {
                 if (&connection != expected_owner)
@@ -115,13 +112,7 @@ int main(int argc, char** argv)
                 else if constexpr (std::same_as<event_type, nom::event::on_disconnected>)
                     fail("Disconnected before receiving the peer payload");
             }};
-        deadline.expires_after(std::chrono::seconds(5));
-        deadline.async_wait(
-            [&](const boost::system::error_code& error)
-            {
-                if (!error)
-                    fail("Timed out waiting for the moved session");
-            });
+        deadline.arm_after(std::chrono::seconds(5), [&] { fail("Timed out waiting for the moved session"); });
         source.connect(callbacks);
         if (!after_connected)
             transfer();

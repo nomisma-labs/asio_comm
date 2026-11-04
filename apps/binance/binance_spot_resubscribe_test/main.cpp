@@ -108,7 +108,7 @@ public:
             std::ostringstream address;
             address << client_.url();
             LINFO("Connecting to {}", address.str());
-            client_.connect(nom::web_socket::delegate{std::ref(*this)});
+            client_.connect(nom::web_socket::ws_delegate{std::ref(*this)});
             break;
         }
         case nom::event::service_command::stop:

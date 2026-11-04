@@ -9,7 +9,6 @@
 #include <boost/asio/any_io_executor.hpp>
 #include <boost/asio/io_context.hpp>
 #include <boost/asio/signal_set.hpp>
-#include <boost/asio/steady_timer.hpp>
 #include <boost/system/error_code.hpp>
 #include <csignal>
 #include <spd_logger/logging.h>
@@ -170,11 +169,11 @@ template <typename Traits> class mexc_spot_client
 public:
     explicit mexc_spot_client(const app_config& config)
         : requests_(subscription_requests(config)),
-          client_(nom::ctx(this).io.get_executor(), nom::url(config.endpoint)), ping_timer_(nom::ctx(this).io)
+          client_(nom::ctx(this).io.get_executor(), nom::url(config.endpoint)),
+          ping_timer_(nom::ctx(this).io.get_executor())
     {
         auto params = client_.params();
         params.max_message_size = config.max_message_size;
-        params.receive_watchdog = nom::ws_params::receive_data_watchdog{};
         client_.update_params(params);
     }
 
@@ -183,7 +182,7 @@ public:
         switch (command)
         {
         case nom::event::service_command::start:
-            client_.connect(nom::web_socket::delegate{std::ref(*this)});
+            client_.connect(nom::web_socket::ws_delegate{std::ref(*this)});
             break;
         case nom::event::service_command::stop:
             ping_timer_.cancel();
@@ -250,20 +249,19 @@ private:
 
     void start_ping_timer()
     {
-        ping_timer_.expires_after(std::chrono::seconds(20));
-        ping_timer_.async_wait(
-            [this](const boost::system::error_code& error)
-            {
-                if (error || !client_.is_connected())
-                    return;
-                if (send(R"({"method":"PING"})"))
-                    start_ping_timer();
-            });
+        ping_timer_.arm_after(std::chrono::seconds(20),
+                              [this]
+                              {
+                                  if (!client_.is_connected())
+                                      return;
+                                  if (send(R"({"method":"PING"})"))
+                                      start_ping_timer();
+                              });
     }
 
     std::vector<std::string> requests_;
     nom::web_socket client_;
-    boost::asio::steady_timer ping_timer_;
+    nom::timer ping_timer_;
 };
 
 struct mexc_spot_assembly : nom::assembly<mexc_spot_assembly, asio_service, market_data_logger, mexc_spot_client>

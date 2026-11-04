@@ -10,8 +10,6 @@
 
 #include <boost/asio/any_io_executor.hpp>
 #include <boost/asio/io_context.hpp>
-#include <boost/asio/steady_timer.hpp>
-#include <boost/system/error_code.hpp>
 
 import std;
 import nom.asio_comm;
@@ -96,11 +94,9 @@ template <typename Traits> class okex_spot_client
 public:
     explicit okex_spot_client(const app_config& config)
         : requests_(subscription_requests(config)),
-          client_(nom::ctx(this).io.get_executor(), nom::url(config.endpoint)), ping_timer_(nom::ctx(this).io)
+          client_(nom::ctx(this).io.get_executor(), nom::url(config.endpoint)),
+          ping_timer_(nom::ctx(this).io.get_executor())
     {
-        auto params = client_.params();
-        params.receive_watchdog = nom::ws_params::receive_data_watchdog{};
-        client_.update_params(params);
     }
 
     void on_request(nom::event::service_command command)
@@ -112,7 +108,7 @@ public:
             std::ostringstream address;
             address << client_.url();
             LINFO("Connecting to {}", address.str());
-            client_.connect(nom::web_socket::delegate{std::ref(*this)});
+            client_.connect(nom::web_socket::ws_delegate{std::ref(*this)});
             break;
         }
         case nom::event::service_command::stop:
@@ -171,30 +167,29 @@ public:
 
 private:
     // OKX prescribes text ping after receive silence of N < 30 s, then checking for pong within N.
-    // This example uses a simpler fixed 20 s schedule and the client's receive-idle monitor; it does
-    // not match each pong to a deadline. Control Ping/Pong cannot replace these application messages.
+    // This example uses a simpler fixed 20 s schedule without a Pong deadline or data-freshness timer.
+    // Control Ping/Pong cannot replace these application messages.
     // https://www.okx.com/docs-v5/en/#overview-websocket-connect
     void start_ping_timer()
     {
-        ping_timer_.expires_after(std::chrono::seconds(20));
-        ping_timer_.async_wait(
-            [this](const boost::system::error_code& error)
-            {
-                if (error || !client_.is_connected())
-                    return;
-                if (!client_.send("ping"))
-                {
-                    LERROR("Heartbeat send failed");
-                    on_request(nom::event::service_command::stop);
-                    return;
-                }
-                start_ping_timer();
-            });
+        ping_timer_.arm_after(std::chrono::seconds(20),
+                              [this]
+                              {
+                                  if (!client_.is_connected())
+                                      return;
+                                  if (!client_.send("ping"))
+                                  {
+                                      LERROR("Heartbeat send failed");
+                                      on_request(nom::event::service_command::stop);
+                                      return;
+                                  }
+                                  start_ping_timer();
+                              });
     }
 
     std::vector<std::string> requests_;
     nom::web_socket client_;
-    boost::asio::steady_timer ping_timer_;
+    nom::timer ping_timer_;
 };
 
 struct okex_spot_assembly : nom::assembly<okex_spot_assembly, asio_service, market_data_logger, okex_spot_client>

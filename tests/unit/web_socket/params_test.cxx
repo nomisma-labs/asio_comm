@@ -19,20 +19,17 @@ TEST_CASE("WebSocket parameter diagnostics describe policies without exposing he
     const auto disabled_text = disabled.str();
     CHECK(disabled_text.contains("passive_ping=disabled"));
     CHECK(disabled_text.contains("active_ping=disabled"));
-    CHECK(disabled_text.contains("receive_watchdog=disabled"));
     CHECK(disabled_text.contains(R"(header_names=["Authorization", "X-Custom-Key"])"));
     CHECK_FALSE(disabled_text.contains("private-token"));
     CHECK_FALSE(disabled_text.contains("private-api-key"));
 
     params.passive_ping = nom::ws_params::server_ping_watchdog{.ping_timeout_sec = 60};
     params.active_ping = nom::ws_params::client_ping_probe{.ping_period_sec = 5, .pong_timeout_sec = 10};
-    params.receive_watchdog = nom::ws_params::receive_data_watchdog{.timeout_sec = 30};
     std::ostringstream enabled;
     enabled << params;
     const auto enabled_text = enabled.str();
     CHECK(enabled_text.contains("passive_ping={ping_timeout_sec=60}"));
     CHECK(enabled_text.contains("active_ping={ping_period_sec=5, pong_timeout_sec=10}"));
-    CHECK(enabled_text.contains("receive_watchdog={timeout_sec=30}"));
     CHECK_FALSE(enabled_text.contains("private-token"));
     CHECK_FALSE(enabled_text.contains("private-api-key"));
 }
@@ -53,18 +50,6 @@ TEST_CASE("WebSocket parameter validation checks numeric bounds")
     CHECK(params.validate().error() == "/async_operation_timeout_sec must be positive");
     params.async_operation_timeout_sec = 1;
 
-    CHECK_FALSE(params.receive_watchdog);
-    params.receive_watchdog = nom::ws_params::receive_data_watchdog{};
-    CHECK(params.receive_watchdog->timeout_sec == 30);
-    REQUIRE(params.validate().has_value());
-    params.receive_watchdog->timeout_sec = 0;
-    REQUIRE_FALSE(params.validate());
-    CHECK(params.validate().error() == "/receive_watchdog/timeout_sec must be positive");
-    params.receive_watchdog->timeout_sec = 1;
-    CHECK(params.validate().has_value());
-    params.receive_watchdog.reset();
-    CHECK(params.validate().has_value());
-
     const auto max_buffer = static_cast<unsigned>(std::numeric_limits<int>::max());
     for (const unsigned invalid : {0u, max_buffer + 1u, std::numeric_limits<unsigned>::max()})
     {
@@ -79,42 +64,32 @@ TEST_CASE("WebSocket parameter validation checks numeric bounds")
         params.socket_recv_buf_size = max_buffer;
         CHECK(params.validate().has_value());
     }
-    // Setup timeout and receive watchdog timeout have no required ordering.
-    params.receive_watchdog = nom::ws_params::receive_data_watchdog{.timeout_sec = 60};
-    CHECK(params.validate().has_value());
 }
 
-TEST_CASE("Ping policies validate independently of receive watchdog monitoring")
+TEST_CASE("Ping policies validate independently")
 {
     nom::ws_params params;
     CHECK_FALSE(params.passive_ping);
     CHECK_FALSE(params.active_ping);
-    for (const bool receive_watchdog_enabled : {false, true})
-    {
-        if (receive_watchdog_enabled)
-            params.receive_watchdog = nom::ws_params::receive_data_watchdog{.timeout_sec = 1};
-        else
-            params.receive_watchdog.reset();
-        params.passive_ping = nom::ws_params::server_ping_watchdog{.ping_timeout_sec = 0};
-        REQUIRE_FALSE(params.validate());
-        CHECK(params.validate().error() == "/passive_ping/ping_timeout_sec must be positive");
-        params.passive_ping->ping_timeout_sec = 60;
-        REQUIRE(params.validate().has_value());
+    params.passive_ping = nom::ws_params::server_ping_watchdog{.ping_timeout_sec = 0};
+    REQUIRE_FALSE(params.validate());
+    CHECK(params.validate().error() == "/passive_ping/ping_timeout_sec must be positive");
+    params.passive_ping->ping_timeout_sec = 60;
+    REQUIRE(params.validate().has_value());
 
-        params.active_ping = nom::ws_params::client_ping_probe{.ping_period_sec = 0, .pong_timeout_sec = 1};
-        REQUIRE_FALSE(params.validate());
-        CHECK(params.validate().error() == "/active_ping/ping_period_sec must be positive");
-        params.active_ping->ping_period_sec = 2;
-        params.active_ping->pong_timeout_sec = 0;
-        REQUIRE_FALSE(params.validate());
-        CHECK(params.validate().error() == "/active_ping/pong_timeout_sec must be positive");
-        params.active_ping->pong_timeout_sec = 5;
-        CHECK(params.validate().has_value());
-        params.passive_ping.reset();
-        CHECK(params.validate().has_value());
-        params.active_ping.reset();
-        CHECK(params.validate().has_value());
-    }
+    params.active_ping = nom::ws_params::client_ping_probe{.ping_period_sec = 0, .pong_timeout_sec = 1};
+    REQUIRE_FALSE(params.validate());
+    CHECK(params.validate().error() == "/active_ping/ping_period_sec must be positive");
+    params.active_ping->ping_period_sec = 2;
+    params.active_ping->pong_timeout_sec = 0;
+    REQUIRE_FALSE(params.validate());
+    CHECK(params.validate().error() == "/active_ping/pong_timeout_sec must be positive");
+    params.active_ping->pong_timeout_sec = 5;
+    CHECK(params.validate().has_value());
+    params.passive_ping.reset();
+    CHECK(params.validate().has_value());
+    params.active_ping.reset();
+    CHECK(params.validate().has_value());
 }
 
 TEST_CASE("WebSocket parameters validate HTTP syntax and header ownership")
@@ -214,7 +189,6 @@ TEST_CASE("Parameter updates are transactional and require an inactive session")
     params.headers = {{.name = "X-Feed", .value = "original"}};
     params.socket_send_buf_size = 4096;
     params.max_message_size = 32 * 1024 * 1024;
-    params.receive_watchdog = nom::ws_params::receive_data_watchdog{.timeout_sec = 7};
     params.passive_ping = nom::ws_params::server_ping_watchdog{.ping_timeout_sec = 60};
     params.active_ping = nom::ws_params::client_ping_probe{.ping_period_sec = 5, .pong_timeout_sec = 10};
     client.update_params(params);
@@ -225,8 +199,6 @@ TEST_CASE("Parameter updates are transactional and require an inactive session")
     CHECK(client.params().headers.front().value == "original");
     CHECK(client.params().socket_send_buf_size == 4096);
     CHECK(client.params().max_message_size == params.max_message_size);
-    REQUIRE(client.params().receive_watchdog);
-    CHECK(client.params().receive_watchdog->timeout_sec == 7);
     REQUIRE(client.params().passive_ping);
     REQUIRE(client.params().active_ping);
     CHECK(client.params().passive_ping->ping_timeout_sec == 60);
@@ -234,7 +206,7 @@ TEST_CASE("Parameter updates are transactional and require an inactive session")
     CHECK(client.params().active_ping->pong_timeout_sec == 10);
 
     auto invalid = params;
-    invalid.receive_watchdog->timeout_sec = 0;
+    invalid.max_message_size = 0;
     invalid.headers.front().value = "must-not-commit";
     const auto error = invalid.validate().error();
     try
@@ -247,11 +219,10 @@ TEST_CASE("Parameter updates are transactional and require an inactive session")
         CHECK(exception.what() == error);
     }
     CHECK(client.params().headers.front().value == "original");
-    REQUIRE(client.params().receive_watchdog);
-    CHECK(client.params().receive_watchdog->timeout_sec == params.receive_watchdog->timeout_sec);
+    CHECK(client.params().max_message_size == params.max_message_size);
 
     unsigned calls = 0;
-    const nom::web_socket::delegate callbacks{[&](nom::web_socket&, const auto&) { ++calls; }};
+    const nom::web_socket::ws_delegate callbacks{[&](nom::web_socket&, const auto&) { ++calls; }};
     client.connect(callbacks);
     REQUIRE(client.status() == nom::ws_status::connecting);
     params.agent_name = "next-agent/1";

@@ -93,7 +93,7 @@ TEST_CASE("Connection initiation exceptions leave a failed session and preserve 
     boost::asio::io_context io;
     nom::web_socket client(io.get_executor(), nom::url("wss://127.0.0.1:1/"));
     unsigned calls = 0;
-    const nom::web_socket::delegate callbacks{[&](nom::web_socket&, const auto&) { ++calls; }};
+    const nom::web_socket::ws_delegate callbacks{[&](nom::web_socket&, const auto&) { ++calls; }};
 
     bool caught_original = false;
     {
@@ -138,7 +138,7 @@ TEST_CASE("Closing pending setup does not allocate and suppresses queued events"
     boost::asio::io_context io;
     nom::web_socket client(io.get_executor(), nom::url("wss://127.0.0.1:1/"));
     unsigned calls = 0;
-    client.connect(nom::web_socket::delegate{[&](nom::web_socket&, const auto&) { ++calls; }});
+    client.connect(nom::web_socket::ws_delegate{[&](nom::web_socket&, const auto&) { ++calls; }});
     REQUIRE(nom::ws_status::connecting == client.status());
 
     {
@@ -163,7 +163,7 @@ TEST_CASE("Move construction allocation failure preserves the source attempt")
     boost::asio::io_context io;
     nom::web_socket source(io.get_executor(), nom::url("wss://127.0.0.1:1/"));
     unsigned calls = 0;
-    source.connect(nom::web_socket::delegate{[&](nom::web_socket&, const auto&) { ++calls; }});
+    source.connect(nom::web_socket::ws_delegate{[&](nom::web_socket&, const auto&) { ++calls; }});
     const auto original_id = source.session_id();
     bool caught_original = false;
     {
@@ -199,7 +199,7 @@ TEST_CASE("Parameter copy failure preserves all installed settings")
     auto candidate = original;
     candidate.headers.front().value.assign(128, 'x');
     candidate.agent_name.assign(128, 'a');
-    candidate.receive_watchdog = nom::ws_params::receive_data_watchdog{.timeout_sec = 5};
+    candidate.active_ping = nom::ws_params::client_ping_probe{.ping_period_sec = 5, .pong_timeout_sec = 10};
     for (const unsigned permitted_allocations : {0u, 1u, 2u})
     {
         CAPTURE(permitted_allocations);
@@ -220,7 +220,7 @@ TEST_CASE("Parameter copy failure preserves all installed settings")
         REQUIRE(caught_original);
         CHECK(client.params().headers.front().value == "original");
         CHECK(client.params().agent_name == "original-agent");
-        CHECK_FALSE(client.params().receive_watchdog);
+        CHECK_FALSE(client.params().active_ping);
         CHECK(client.session_id() == id);
         CHECK(client.status() == nom::ws_status::init);
         CHECK(io.poll() == 0);

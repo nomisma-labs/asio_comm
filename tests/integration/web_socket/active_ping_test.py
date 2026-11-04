@@ -19,9 +19,9 @@ from loopback_test import handshake, read_frame
 from passive_ping_test import await_disconnect
 
 
-CASES = ('silent', 'traffic', 'different_payload', 'stale', 'unsolicited', 'duplicate', 'late', 'healthy', 'slow_pong',
+CASES = ('silent', 'traffic', 'different_payload', 'stale', 'unsolicited', 'duplicate', 'late', 'late_rearm', 'healthy', 'slow_pong',
          'queued', 'send_completion_delay', 'disabled', 'peer_close_interval', 'peer_close_pending', 'read_error_interval',
-         'read_error_pending', 'close_pending', 'graceful', 'move', 'reconnect', 'send_timeout', 'send_unblocked')
+         'read_error_pending', 'close_pending', 'destroy_pending', 'move', 'reconnect', 'send_timeout', 'send_unblocked')
 
 
 def frame(connection, opcode, payload):
@@ -85,12 +85,6 @@ def serve_probe(connection, case, client_finished):
         return
     if case.startswith('read_error'):
         return
-    if case == 'graceful':
-        opcode, close_payload = read_frame(connection)
-        assert opcode == 0x88, 'receive watchdog must close while a probe is pending'
-        frame(connection, 0x88, close_payload)
-        connection.unwrap().close()
-        return
     if case in ('healthy', 'slow_pong', 'queued', 'send_completion_delay'):
         for attempt in range(3):
             if case == 'slow_pong':
@@ -110,7 +104,7 @@ def serve_probe(connection, case, client_finished):
                 assert payload != previous, 'each probe needs a fresh payload'
                 assert time.monotonic() - started >= 0.85, 'overlapping probe changed cadence'
         frame(connection, 0x81, b'finish')
-    elif case == 'close_pending':
+    elif case in ('close_pending', 'destroy_pending'):
         frame(connection, 0x81, b'finish')
     elif case == 'stale':
         frame(connection, 0x8a, payload)
@@ -130,10 +124,15 @@ def serve_probe(connection, case, client_finished):
         # The first Pong completes the probe; the second reaches waiting_to_ping and fails it.
         pong = bytes((0x8a, len(payload))) + payload
         connection.sendall(pong + pong)
-    elif case == 'late':
+    elif case in ('late', 'late_rearm'):
         # Deliver data and then a Pong in one TLS write. The data callback holds the executor
         # beyond the deadline. Pong is dispatched first while still in send_done and completes it.
-        connection.sendall(b'\x81\x04late' + bytes((0x8a, len(payload))) + payload)
+        frames = b'\x81\x04late' + bytes((0x8a, len(payload))) + payload
+        if case == 'late_rearm':
+            # A second data callback stalls after the Pong rearms the interval. The old Pong
+            # completion must stay obsolete even when dispatch resumes beyond the new deadline.
+            frames += b'\x81\x0aafter_pong'
+        connection.sendall(frames)
         assert read_ping(connection) != payload, 'state dispatch must decide between Pong and timeout events'
         frame(connection, 0x81, b'finish')
     elif case == 'traffic':
@@ -184,7 +183,7 @@ def run_case(client, context, certificate, case):
         assert not worker.is_alive(), f'{case}: peer did not stop; {output}'
         assert not errors, f'{case}: {errors}; {output}'
         assert result.returncode == 0, f'{case}: {output}'
-        if case.startswith(('peer_close', 'read_error')) or case in ('close_pending', 'graceful'):
+        if case.startswith(('peer_close', 'read_error')) or case in ('close_pending', 'destroy_pending'):
             assert elapsed < 6, f'{case}: terminal cleanup retained the ten-second timer'
         print(f'active Ping {case}: passed', flush=True)
 

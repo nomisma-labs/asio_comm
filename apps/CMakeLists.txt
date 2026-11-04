@@ -4,6 +4,8 @@
 # General examples; exchange applications are grouped below without changing executable names.
 add_subdirectory(asio_comm_example)
 add_subdirectory(web_socket_example)
+add_subdirectory(https_example)
+add_subdirectory(timer_example)
 
 add_subdirectory(binance)
 add_subdirectory(bitflyer)
