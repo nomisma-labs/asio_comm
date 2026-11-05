@@ -16,6 +16,17 @@ WS-01, WS-02, WS-04, and WS-05 are complete. WS-03 is closed as unconfirmed.
 Active/passive Pings are **DEV-DONE/LIVE-TEST-PENDING**. `WS-IDLE` is **RETIRED** from
 WebSocket: application heartbeats are ordinary data, so subscribers own useful-data freshness.
 
+**Current implementation/example phase is closed.** The
+[2026-11-05 live connectivity report](../../apps/conn_test_summary.md) records 37 PASS,
+1 NO_DATA (Crypto.com's one-second sample) and 1 SKIP (Binance SBE without credentials)
+across 20 feeders and 19 providers. This is short public-endpoint/payload validation; it does
+not close the longer Ping, connection-loss or closing-timeout checks in WS-06. Those checks,
+WS-08 and WS-09 remain explicit follow-ups.
+
+The final fresh `complete` build passed all **20 tests** on 2026-11-05; see the
+[phase validation record](current_work.md#phase-validation). This local result leaves the
+live/network-fault validation boundaries above unchanged.
+
 | Stage ID | Batch | Complexity | Status |
 | --- | --- | --- | --- |
 | [WS-01](#ws-01) | Mechanical source cleanup and public-export audit | Small | COMPLETE |
@@ -32,7 +43,7 @@ implemented behavior is ready for live exchange or controlled network-fault vali
 is not a claim that those scenarios have passed. `PARTIAL` still has development or local
 fault-test work. `POSTPONED` moves work outside the current WebSocket pass.
 
-**Remaining development:** remaining operation-timeout coverage (WS-06), exception guarantees
+**Deferred development:** remaining operation-timeout coverage (WS-06), exception guarantees
 (WS-08), and selected TLS/transport options (WS-09).
 Application-level heartbeats and market-data classification belong to exchange adapters.
 `WS-TIMER-GENERATION` is **COMPLETE**: active/passive Ping waits now use `nom::timer`, as do HTTPS deadlines.
@@ -423,7 +434,7 @@ Markdown/link and diff review.
 | [`WS-MOVE-COPY`](web_socket.cpp) | Consider enabling move/copy construction and assignment for web_socket (why are they disabled?). | [WS-02](#ws-02) |
 | [`WS-TLS-OWNERSHIP`](web_socket.cpp) | Review why the TLS context is at the web_socket level (could it move to session?). | [WS-02](#ws-02) |
 
-**Next work:** choose remaining close-timeout coverage (WS-06), the exception audit (WS-08),
+**Future work:** choose remaining close-timeout coverage (WS-06), the exception audit (WS-08),
 or transport-option decisions (WS-09). Run live Ping/connection-loss validation alongside
 those tasks. Application-level heartbeats remain exchange-adapter work. Keep the completed control-Ping scope closed
 unless validation exposes a concrete defect or a new requirement is agreed.

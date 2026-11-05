@@ -1,5 +1,10 @@
 **Communication work status and execution/simulation proposal — updated 2026-11-05**
 
+**Current implementation and example phase — COMPLETE.** WebSocket cleanup, HTTPS, the timer,
+exchange examples and the connectivity runner are ready to hand over. The remaining fault
+validation, exception audit, transport decisions and execution/simulation design are explicit
+follow-ups; their completion is not implied by closing this phase.
+
 <a id="https-timer-completion"></a>
 
 **HTTPS and Timer — COMPLETE (2026-11-05)**
@@ -26,9 +31,28 @@ suite pass in Debug and ASan/UBSan builds (three suites in each). Both examples 
 the loopback suite exercises repeated HTTPS requests, and the Debug Timer example delivers
 the requested three ticks. Documentation links and `git diff --check` pass.
 
-Local tests cover the current contract; public exchange interoperability remains future
-integration validation. Completion does not claim live exchange/order-execution validation
-or implementation of the deferred features.
+<a id="phase-validation"></a>
+
+**Final phase validation — 2026-11-05:** `CMAKE_BUILD_PARALLEL_LEVEL=4 ./bootstrap.sh complete`
+completed from a clean `build/complete`. All **20 tests passed** (17 integration, 3 unit),
+including source-tree/installed-package consumers, protocol and fault fixtures, application
+shutdown and the offline connectivity runner. Python, SPDX headers, formatting and dependency
+checks passed; the bootstrap recorded **11 passed, 0 failed, 0 skipped, 0 noted**.
+
+**Live connectivity smoke check — 2026-11-05 (Singapore):** the
+[saved report](../../apps/conn_test_summary.md) covers 20 feeders and 19 providers:
+**37 PASS, 1 NO_DATA, 1 SKIP**, with no application failures or process timeouts. All 19 catalog
+providers completed. Crypto.com's one-second feeder sample ended before data arrived; its
+subscription has a one-second startup delay. Binance SBE was skipped without its API key.
+This run used one second per feeder, ten seconds per provider after connection and ten seconds
+between runs; providers exited on completed output. The
+[runner](../../tools/asio_comm/conn_test.sh) now defaults to two seconds per feeder; the saved
+report retains the timings actually used for that run.
+
+This establishes short public-endpoint interoperability and payload receipt, not market-data
+correctness or sustained availability. Long-running control-Ping checks, network blackholes,
+server rotation and close-timeout coverage remain tracked in [WS-06](ws_current_work.md#ws-06).
+Private-feed/order-execution validation and the deferred features remain outside the completed scope.
 
 **Execution and simulation proposal**
 

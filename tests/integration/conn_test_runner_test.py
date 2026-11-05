@@ -110,7 +110,7 @@ exec {shlex.quote(shutil.which('date'))} "$@"
 
         folder = build_directory(root, "build with spaces")
         executable(folder / "bin/a_feeder", '''
-[[ "$*" == '--exit-after-sec 1' ]] || exit 7
+[[ "$*" == '--exit-after-sec 2' ]] || exit 7
 echo 'INFO main.cpp:1 Connected: local'
 echo 'CONN_STATS messages=3 payload_bytes=12345' >&2
 ''')

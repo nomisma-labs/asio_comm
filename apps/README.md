@@ -44,7 +44,7 @@ The script runs executable `bin/*_feeder` and `bin/*_symbol_provider` sequential
 directory must contain a matching asio_comm `CMakeCache.txt`; the script does not choose a preset.
 It requires Bash, standard Linux utilities and GNU `timeout` (or `gnutimeout`).
 
-Defaults are **1 second per feeder**, **10 seconds per provider**, and **10 seconds between runs**.
+Defaults are **2 seconds per feeder**, **10 seconds per provider**, and **10 seconds between runs**.
 App runtime starts after connection; providers exit earlier when their catalog is written.
 `--timeout-sec` separately bounds the entire process (default **60 seconds**): SIGTERM on expiry,
 then SIGKILL after five seconds if needed. Ctrl+C stops the active application and leaves a partial
@@ -60,7 +60,7 @@ The script checks completion and nonempty payloads without parsing JSON or valid
 
 Results are `PASS`, `FAIL`, `NO_DATA`, `TIMEOUT`, or `SKIP`; interruption marks the active row
 `INTERRUPTED`. A feeder that connects but receives nothing is `NO_DATA`, not necessarily broken:
-the one-second default is a short sample, and Crypto.com intentionally delays subscription by one
+the two-second default is still a short sample, and Crypto.com intentionally delays subscription by one
 second. Increase `--feeder-sec` when investigating an empty sample. Binance SBE is skipped when
 `BINANCE_SBE_API_KEY` is absent. Script exit codes are **0** for passes/explicit skips, **1** when
 any check fails, has no data or times out, **2** for usage/build errors, and **130/143** for SIGINT/SIGTERM.

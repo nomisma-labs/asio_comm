@@ -1,10 +1,10 @@
 # asio_comm
 
 <!-- repo-description:begin -->
-`asio_comm` will provide C++ implementations of WebSocket, HTTP and other communication
-protocols, initially for connectivity to cryptocurrency exchanges. The repository contains
-TLS WebSocket and asynchronous HTTPS clients, a generation-safe timer, public exchange market-data
-feeders, WebSocket symbol providers, and communication/timer/logging examples.
+`asio_comm` provides C++ TLS WebSocket and asynchronous HTTPS/HTTP/1.1 clients, plus a
+generation-safe timer, for connectivity to cryptocurrency exchanges. The repository includes
+public market-data feeders, WebSocket and HTTPS symbol providers, communication/timer/logging
+examples, and a live connectivity test runner.
 <!-- repo-description:end -->
 
 ## Components
@@ -55,4 +55,5 @@ zlib development package to handle compressed application heartbeats.
 - [Documentation index](docs/README.md)
 - [Development recipes](docs/kit/howto.md)
 - [Changelog](CHANGELOG.md)
+- [TODO and work plans](TODO.md)
 - [Agent instructions](AGENTS.md)

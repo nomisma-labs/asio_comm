@@ -16,7 +16,7 @@ Run from a configured asio_comm build directory, e.g.:
   ../../tools/asio_comm/conn_test.sh --build
 
   --build           Build the feeders and providers group targets first.
-  --feeder-sec N    Feeder time after connection (default: 1).
+  --feeder-sec N    Feeder time after connection (default: 2).
   --provider-sec N  Provider time after connection (default: 10).
   --delay-sec N     Pause between applications (default: 10).
   --timeout-sec N   Total process deadline including setup (default: 60).
@@ -33,7 +33,7 @@ EOF
 
 die() { printf 'conn_test: %s\n' "$*" >&2; exit 2; }
 
-feeder_sec=1
+feeder_sec=2
 provider_sec=10
 delay_sec=10
 timeout_sec=60
@@ -102,7 +102,7 @@ cat >"$summary" <<EOF
 Payload bytes exclude logging and transport overhead. Feeder counts cover relayed application
 payloads, possibly including acknowledgements/heartbeats; they do not prove market-data readiness.
 Binary/compressed payloads use their received size. Provider bytes describe the completed catalog.
-An empty one-second sample is NO_DATA, not proof of a broken connection.
+An empty short sample is NO_DATA, not proof of a broken connection.
 
 EOF
 printf 'Report: %s/%s\n' "$build_dir" "$summary"

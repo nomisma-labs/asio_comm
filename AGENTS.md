@@ -1,11 +1,12 @@
 # AGENTS.md
 
 <!-- repo-description:begin -->
-`asio_comm` is intended for C++ implementations of WebSocket, HTTP and other communication
-protocols, initially for cryptocurrency exchanges. It currently contains an initial TLS
-WebSocket client, public exchange market-data feeders, and WebSocket and logging/relay examples. `base`,
-`spd_logger`, and `assembly` are repository dependencies. Boost is discovered through the shared
-kit; OpenSSL supplies TLS and Catch2 is available for tests.
+`asio_comm` provides C++ TLS WebSocket and asynchronous HTTPS/HTTP/1.1 clients, plus a
+generation-safe timer, for connectivity to cryptocurrency exchanges. The repository includes
+public market-data feeders, WebSocket and HTTPS symbol providers, communication/timer/logging
+examples, and a live connectivity test runner. `base`, `spd_logger`, and `assembly` are repository
+dependencies. Boost.Asio/Beast is discovered through the shared kit; OpenSSL supplies TLS and
+Catch2 is available for tests.
 <!-- repo-description:end -->
 
 Read and follow the rules every Nomisma repo shares: @docs/kit/agents.md
