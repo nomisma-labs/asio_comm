@@ -6,18 +6,21 @@
 
 import argparse
 from concurrent.futures import ThreadPoolExecutor
+import gzip
 import json
 import os
 from pathlib import Path
 import signal
 import socket
 import ssl
+import struct
 import subprocess
 import tempfile
 import threading
 import time
 
 from loopback_test import handshake, read_frame
+from symbol_provider_test import frame_header
 from exchange_apps_test import FEEDERS
 from feeders_test import subscriptions
 
@@ -40,6 +43,14 @@ def run_case(client, context, certificate, mode):
     symbols, requests = feeder_subscription(client)
     # Crypto.com deliberately waits one second before subscribing.
     runtime_sec = 2 if client.name == "crypto_com_spot_feeder" else 1
+    stats_payload = b'{"sample":"payload"}'
+    binary = client.name in ("binance_spot_sbe_feeder", "mexc_spot_feeder", "htx_spot_feeder")
+    if client.name == "binance_spot_sbe_feeder":
+        stats_payload = struct.pack('<HHHH', 0, 10000, 1, 0) + b'opaque'
+    elif client.name == "mexc_spot_feeder":
+        stats_payload = b'\x0a\x05trade\x12\x06opaque'
+    elif client.name == "htx_spot_feeder":
+        stats_payload = gzip.compress(b'{"ch":"market.btcusdt.trade.detail","data":"opaque"}')
     with socket.socket() as listener:
         listener.bind(("127.0.0.1", 0))
         listener.listen(1)
@@ -76,7 +87,15 @@ def run_case(client, context, certificate, mode):
                                         actual.pop("time", None)
                                         actual.pop("nonce", None)
                                     assert actual == request, (actual, request)
-                            # Confirm the read loop is active. No market data is needed for timed exit.
+                            if mode == "stats":
+                                # Fragmentation and control traffic do not create extra payload events.
+                                cut = len(stats_payload) // 2
+                                connection.sendall(frame_header(0x02 if binary else 0x01, cut) + stats_payload[:cut])
+                                connection.sendall(b"\x89\x04part")
+                                assert read_frame(connection) == (0x8A, b"part")
+                                connection.sendall(frame_header(0x80, len(stats_payload) - cut) + stats_payload[cut:])
+                                connection.sendall(frame_header(0x82 if binary else 0x81, len(stats_payload)) + stats_payload)
+                            # Confirm the read loop consumed preceding data before signaling the app.
                             connection.sendall(b"\x89\x04exit")
                             assert read_frame(connection) == (0x8A, b"exit")
                             ready.set()
@@ -97,6 +116,7 @@ def run_case(client, context, certificate, mode):
         options = [] if mode == "sigterm_default" else ["--exit-after-sec", {
             "zero": "0", "timeout": str(runtime_sec), "sigint": "30", "signal_connecting": "0",
             "signal_subscribing": "30",
+            "stats": "30",
             "peer_close": "4294967295", "rejected": "0",
         }[mode]]
         command = [str(client), "--symbols", symbols, "--channels", "trade", *options,
@@ -105,7 +125,7 @@ def run_case(client, context, certificate, mode):
                    BINANCE_SBE_API_KEY="loopback-test-only")
         process = subprocess.Popen(command, env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         try:
-            if mode in ("sigint", "sigterm_default", "signal_connecting", "signal_subscribing"):
+            if mode in ("sigint", "sigterm_default", "signal_connecting", "signal_subscribing", "stats"):
                 assert ready.wait(5), "Client did not reach the signal test point"
                 assert not errors, errors
                 if mode == "sigterm_default":
@@ -121,6 +141,10 @@ def run_case(client, context, certificate, mode):
         output = stdout + stderr
         assert not worker.is_alive(), "Server did not finish"
         assert not errors, f"{client.name}/{mode}: {errors}; {output}"
+        # Count complete payloads, using compressed/binary sizes; exclude control Ping/Pong.
+        expected_messages = 2 if mode == "stats" else 0
+        expected_bytes = expected_messages * len(stats_payload)
+        assert stderr.count(f"CONN_STATS messages={expected_messages} payload_bytes={expected_bytes}\n") == 1, stderr
         assert process.returncode == (1 if mode in ("peer_close", "rejected") else 0), output
         assert output.count("Connected:") == (0 if mode in ("signal_connecting", "rejected") else 1), output
         if mode in ("zero", "signal_connecting", "signal_subscribing", "rejected"):
@@ -130,7 +154,7 @@ def run_case(client, context, certificate, mode):
             assert f"Stopping after {runtime_sec} seconds connected" in output, output
         elif mode == "zero":
             assert "Stopping after connection" in output, output
-        elif mode in ("sigint", "sigterm_default", "signal_connecting", "signal_subscribing"):
+        elif mode in ("sigint", "sigterm_default", "signal_connecting", "signal_subscribing", "stats"):
             assert "Stopping on signal" in output and "seconds connected" not in output, output
         else:
             assert "Stopping after" not in output, output
@@ -144,7 +168,7 @@ def check_feeder(client, context, certificate):
         assert result.returncode == 1 and result.stderr and "Connecting" not in result.stdout, result
     result = subprocess.run([str(client), "--help"], capture_output=True, text=True, timeout=3)
     assert result.returncode == 0 and "--exit-after-sec" in result.stdout
-    for mode in ("zero", "timeout", "sigint", "sigterm_default", "signal_connecting", "peer_close", "rejected"):
+    for mode in ("zero", "timeout", "sigint", "sigterm_default", "signal_connecting", "peer_close", "rejected", "stats"):
         run_case(client, context, certificate, mode)
     if client.name == "crypto_com_spot_feeder":
         run_case(client, context, certificate, "signal_subscribing")

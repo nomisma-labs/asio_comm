@@ -25,6 +25,49 @@ cmake --build --preset dev --target feeders providers
 
 These targets do not change which apps participate in a preset's default build.
 
+## Live connectivity check
+
+[Latest saved connectivity test summary](conn_test_summary.md).
+
+Run [conn_test.sh](../tools/asio_comm/conn_test.sh) **from a configured asio_comm build directory**:
+
+```sh
+cd build/dev
+../../tools/asio_comm/conn_test.sh --build
+# Use existing binaries and adjust the sampling time:
+../../tools/asio_comm/conn_test.sh --feeder-sec 3 --provider-sec 10 --delay-sec 10
+```
+
+The script runs executable `bin/*_feeder` and `bin/*_symbol_provider` sequentially in name order.
+`--build` first builds both group targets (four jobs by default; override with
+`CMAKE_BUILD_PARALLEL_LEVEL`). Without it, only already-built apps are covered. The current
+directory must contain a matching asio_comm `CMakeCache.txt`; the script does not choose a preset.
+It requires Bash, standard Linux utilities and GNU `timeout` (or `gnutimeout`).
+
+Defaults are **1 second per feeder**, **10 seconds per provider**, and **10 seconds between runs**.
+App runtime starts after connection; providers exit earlier when their catalog is written.
+`--timeout-sec` separately bounds the entire process (default **60 seconds**): SIGTERM on expiry,
+then SIGKILL after five seconds if needed. Ctrl+C stops the active application and leaves a partial
+report. Each run writes `conn_test_results/<UTC timestamp>-<unique suffix>/summary.md` with
+per-app stdout/stderr links, elapsed time, exit code, message count and payload bytes.
+Elapsed times use monotonic Linux uptime, so system-clock adjustments do not distort durations.
+
+Feeders emit `CONN_STATS messages=N payload_bytes=N` on stderr after callbacks drain. Counts
+cover payloads relayed to their output nodes, possibly including acknowledgements/heartbeats;
+control frames, log formatting and transport overhead are excluded. Binary/compressed messages
+use their received payload size. Providers retain their existing `Received N bytes` diagnostic.
+The script checks completion and nonempty payloads without parsing JSON or validating markets.
+
+Results are `PASS`, `FAIL`, `NO_DATA`, `TIMEOUT`, or `SKIP`; interruption marks the active row
+`INTERRUPTED`. A feeder that connects but receives nothing is `NO_DATA`, not necessarily broken:
+the one-second default is a short sample, and Crypto.com intentionally delays subscription by one
+second. Increase `--feeder-sec` when investigating an empty sample. Binance SBE is skipped when
+`BINANCE_SBE_API_KEY` is absent. Script exit codes are **0** for passes/explicit skips, **1** when
+any check fails, has no data or times out, **2** for usage/build errors, and **130/143** for SIGINT/SIGTERM.
+The `asio_comm_conn_test_runner` test uses fake executables and never contacts exchanges.
+
+## Exchange coverage
+
 The tables track the target exchange coverage. App links identify implemented examples and their
 API references. All providers previously blocked by missing HTTPS support are implemented;
 catalog scope is stated where it differs from the feeder. Unverified hosting cells remain explicit.

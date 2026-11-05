@@ -123,8 +123,17 @@ std::string message_type(std::string_view data)
 
 template <typename Traits> struct market_data_logger
 {
+    struct context_mixin
+    {
+        // Count relayed application payloads, which may include acknowledgements and heartbeats.
+        std::uint64_t received_messages{};
+        std::uint64_t received_payload_bytes{};
+    };
+
     void on_response(const nom::event::market_data& event)
     {
+        ++nom::ctx(this).received_messages;
+        nom::ctx(this).received_payload_bytes += event.size;
         LINFO("type={} size={}", event.type, event.size);
     }
 };
@@ -235,6 +244,9 @@ struct app : nom::relay<binance_spot_sbe_assembly>
         request(nom::event::service_command::start);
         // Drain canceled handlers before destroying the nodes; do not stop the context early.
         ctx().io.run();
+        // Stable stderr summary for tools/asio_comm/conn_test.sh; exclude log and transport overhead.
+        std::cerr << "CONN_STATS messages=" << ctx().received_messages
+                  << " payload_bytes=" << ctx().received_payload_bytes << '\n';
         return ctx().exit_code.value_or(1);
     }
 };

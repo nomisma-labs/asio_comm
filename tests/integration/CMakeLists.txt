@@ -5,6 +5,14 @@
 
 nom_library_usage_tests(library_usage)
 
+if(nom_build_tests)
+    find_package(Python 3.10 REQUIRED COMPONENTS Interpreter)
+    add_test(NAME ${PROJECT_NAME}_conn_test_runner
+        COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/conn_test_runner_test.py
+            --script ${PROJECT_SOURCE_DIR}/tools/asio_comm/conn_test.sh)
+    set_tests_properties(${PROJECT_NAME}_conn_test_runner PROPERTIES LABELS integration TIMEOUT 60)
+endif()
+
 if(nom_build_tests AND TARGET web_socket_example)
     # A client driven by the local TLS peer; it is a test fixture, not an installed app.
     block(SCOPE_FOR VARIABLES)
