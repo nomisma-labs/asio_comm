@@ -10,8 +10,9 @@ import nom.url;
 // Normalize a copy for the wire; validation leaves configured/displayed identifiers unchanged.
 inline std::string normalized_symbol(std::string symbol)
 {
-    for (auto& letter : symbol)
-        letter = std::tolower(letter, std::locale::classic());
+    const auto& facet = std::use_facet<std::ctype<char>>(std::locale::classic());
+
+    facet.tolower(symbol.data(), symbol.data() + symbol.size());
     return symbol;
 }
 
