@@ -1,8 +1,9 @@
 # How to add code
 
 Recipes for the usual changes. A new repo starts empty and grows through them; cmake_template's
-example code (`core/example/`, `apps/hello/`, `tests/`) is the worked reference for each one.
-`<repo>` stands for the repo's name, the one in `project()`. Names follow
+example code (`src/example/`, `apps/hello/`, `tests/`) is the worked reference for each one.
+`<repo>` stands for the repo's name, the one in `project()`. Library sources go in `src/`
+in every repository. Docs remain in `docs/<repo>/` and tools in `tools/<repo>/`. Names follow
 [conventions.md](conventions.md), every new file starts with the SPDX header
 ([conventions.md](conventions.md#enforcement)), and build commands are in [build.md](build.md).
 
@@ -15,10 +16,10 @@ live directly in `nom`.
 In `cmake_template`, the illustrative library is instead named `example`: the integration test
 uses `find_package(cmake_template)` and links `nom::example`.
 
-1. Put the primary module interface in `core/<repo>/<repo>.cppm`. Define the public API there
+1. Put the primary module interface in `src/<repo>/<repo>.cppm`. Define the public API there
    or in interface partitions (`<part>.cppm`); put compiled definitions in implementation units
    (`<file>.cpp`). The [module recipe](#a-module) shows the source layout.
-2. Add `core/<repo>/CMakeLists.txt`:
+2. Add `src/<repo>/CMakeLists.txt`:
    ```cmake
    nom_lib(<repo> IMPORT_STD
        MODULES <repo>.cppm thing.cppm
@@ -32,8 +33,13 @@ uses `find_package(cmake_template)` and links `nom::example`.
    `DEPENDENCIES` lists the packages needed by exported CMake targets, including private
    dependencies that a static library carries into its link interface. The helper skips
    installation rules when `nom_install` is OFF.
-3. Add `add_subdirectory(<repo>)` to `core/CMakeLists.txt`.
+3. Add `add_subdirectory(<repo>)` to `src/CMakeLists.txt`. The initialized scaffold
+   already registers `src/` in the root `CMakeLists.txt`.
 4. Add its unit tests and library usage integration tests (below).
+
+`nom_lib()` defaults the file-set base to `${PROJECT_SOURCE_DIR}/src`. Pass `BASE_DIR`
+explicitly for another layout. Installed headers and module sources keep their paths
+relative to that base, such as `<repo>/macros.h`, without a `src/` prefix.
 
 Use `STATIC` or `SHARED` in `nom_lib` to select compiled-library linkage explicitly.
 They are mutually exclusive and require sources or modules. Omitting both preserves
@@ -49,13 +55,13 @@ a repo makes once.
 Nomisma libraries expose their APIs through native named modules. Their declarations follow the
 module declaration; apps and tests consume them with `import nom.<repo>;`.
 
-1. Add `core/<repo>/<repo>.cppm`:
+1. Add `src/<repo>/<repo>.cppm`:
    ```cpp
    export module nom.<repo>;
 
    export import :thing;
    ```
-2. Add the interface partition `core/<repo>/thing.cppm`:
+2. Add the interface partition `src/<repo>/thing.cppm`:
    ```cpp
    export module nom.<repo>:thing;
 
@@ -70,7 +76,7 @@ module declaration; apps and tests consume them with `import nom.<repo>;`.
    ```
    Template definitions belong in the interface or partition too, so importers can instantiate
    them. A small library can define its API directly in the primary interface without partitions.
-3. Put compiled definitions in `core/<repo>/thing.cpp`:
+3. Put compiled definitions in `src/<repo>/thing.cpp`:
    ```cpp
    module nom.<repo>;
 
@@ -91,7 +97,7 @@ module declaration; apps and tests consume them with `import nom.<repo>;`.
    and pass `IMPORT_STD` to the target helper. Enable the pre-project
    setup described in [build.md](build.md#modules). For macro-bearing or third-party includes,
    start with a global module fragment (`module;`, then the includes). Keep dependencies
-   private when the API does not need their types: `core/example/settings.cpp` includes nlohmann
+   private when the API does not need their types: `src/example/settings.cpp` includes nlohmann
    privately and exports ordinary settings, parsing and serialization services through its
    interface partition. Macros remain in headers; include those before imports in consumers.
 
@@ -212,7 +218,7 @@ and packaging tools. Packaging does not choose or generate the Python API.
 
 1. Put binding sources in `python/` and Python files in `python/<package>/`. The binding must
    export the extension name selected below (`_native`); `__init__.py` can expose its public API.
-2. After the root's `add_subdirectory(core)`, enable that directory only on request:
+2. After the root's `add_subdirectory(src)`, enable that directory only on request:
    ```cmake
    if(nom_build_python)
        add_subdirectory(python)
@@ -294,7 +300,7 @@ environment. Change shared mechanisms in the template, then synchronize them int
   git -C external/<dep> checkout v<x.y.z>
   git add external/<dep>
   ```
-  Then, in the top-level `CMakeLists.txt` before `add_subdirectory(core)`:
+  Then, in the top-level `CMakeLists.txt` before adding `src/`:
   ```cmake
   nom_require_submodule(external/<dep>)
   FetchContent_Declare(<dep> SOURCE_DIR ${PROJECT_SOURCE_DIR}/external/<dep>)
@@ -324,7 +330,8 @@ environment. Change shared mechanisms in the template, then synchronize them int
 ## An experiment
 
 `python3 tools/kit/add_sandbox_app.py <name>` creates `apps/sandbox/<name>/`, built as
-`bin/sandbox_<name>` and linked to the main library if the repo has one. It uses `BUILD_FOR complete`:
+`bin/sandbox_<name>` and linked to the main library when `src/<repo>/`
+exists. It uses `BUILD_FOR complete`:
 run `cmake --workflow --preset complete`, or build its target explicitly in another preset. If an
 experiment has its own support libraries, mark them `EXCLUDE_FROM_ALL TRUE` so they build only
 when a dependent app is requested. Experiments that need third-party code fetch it in their

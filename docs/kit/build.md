@@ -240,7 +240,7 @@ The entry point provides:
 |---|---|
 | `nom_enable_std_modules(<target>)` | Enable C++23 standard-library modules on an existing compiled target; validate toolchain support and restrict Clang's reserved-module-name warning exception to vendor sources. |
 | `nom_project_options()` | The project's options (below). Call it right after `project()`. |
-| `nom_lib(<name> [IMPORT_STD] [STATIC \| SHARED] [SOURCES …] [HEADERS …] [MODULES …] [BASE_DIR <dir>] [PUBLIC_DEPS …] [PRIVATE_DEPS …] [COMPILE_OPTIONS …])` | Library `<name>` plus alias `nom::<name>`. `MODULES` lists native interfaces and partitions; `SOURCES` lists implementation units and other compiled sources. File sets are rooted at `BASE_DIR` (default `core/`). Header-only macro or dependency adapters can be INTERFACE targets. Compile options are PRIVATE for compiled libraries and INTERFACE otherwise. |
+| `nom_lib(<name> [IMPORT_STD] [STATIC \| SHARED] [SOURCES …] [HEADERS …] [MODULES …] [BASE_DIR <dir>] [PUBLIC_DEPS …] [PRIVATE_DEPS …] [COMPILE_OPTIONS …])` | Library `<name>` plus alias `nom::<name>`. `MODULES` lists native interfaces and partitions; `SOURCES` lists implementation units and other compiled sources. File sets are rooted at `BASE_DIR` (default: `${PROJECT_SOURCE_DIR}/src`). Header-only macro or dependency adapters can be INTERFACE targets. Compile options are PRIVATE for compiled libraries and INTERFACE otherwise. |
 | `nom_app(<name> [IMPORT_STD] SOURCES … [DEPS …] [BUILD_FOR …] [COMPILE_OPTIONS …])` | Executable target `<name>` (unique across the whole build), binary `bin/<name>`; selects default build/install participation by preset; collects an adjacent `config/` directory. Compile options are PRIVATE. |
 | `nom_python_module(<target> [IMPORT_STD] MODULE_NAME <name> PACKAGE <package> SOURCES … [DEPS …] [RUNTIME_LIBRARIES …])` | Linux Python extension and explicitly bundled shared libraries, installed through the `nom_python` component. |
 | `nom_c2test(<suite> [IMPORT_STD] SOURCES … [DEPS …] [LABELS …] [PROPERTIES …])` | Catch2 executable `<project>_<suite>`, registered with CTest and labeled `unit`; `LABELS` replaces the label, `PROPERTIES` sets other test properties. Needs `nom_find_catch2()`. |
@@ -249,6 +249,12 @@ The entry point provides:
 | `nom_require_submodule(<path>)` | Fails early, with the fix, when a submodule wasn't checked out. |
 | `nom_find_catch2()` | An installed Catch2 3.16.1 or newer within major version 3, otherwise that release downloaded and built in the build tree; called at the project root when tests are enabled, before code directories. |
 | `nom_find_boost()` | The system Boost 1.90 or newer with `Boost::program_options`, `Boost::filesystem` and `Boost::iostreams`; called at the project root, before code directories. |
+
+`nom_lib()` defaults `BASE_DIR` to `${PROJECT_SOURCE_DIR}/src`, independently of the
+declaration's directory or the repository's workspace location. Pass an explicit `BASE_DIR`
+for another layout. The base controls file-set include and install paths: a header at
+`src/prices/macros.h` is included and installed as `prices/macros.h`. Module sources follow
+the same rule; the `src/` directory does not become part of the public path.
 
 `nom_c2test` is specific to Catch2. Future test frameworks can have their own helpers
 without changing `nom_lib` or `nom_app`.
@@ -332,9 +338,11 @@ This step copies config files; it does not generate or load runtime configuratio
 
 ## Modules
 
-Nomisma libraries define their C++ APIs in native named modules. The primary interface is
-`core/<repo>/<repo>.cppm`, declaring `export module nom.<repo>;`. Larger APIs can split into
-interface partitions and re-export them from the primary interface. Template definitions live
+Nomisma libraries define their C++ APIs in native named modules. A component's primary interface
+is `src/<component>/<component>.cppm`. The main library normally declares
+`export module nom.<repo>;`; its module name is independent of the source-directory name.
+Larger APIs can split into interface partitions and re-export them from the primary interface.
+Template definitions live
 in interfaces or partitions; compiled definitions live in `.cpp` implementation units declaring
 `module nom.<repo>;`. Apps and tests use `import nom.<repo>;`.
 
@@ -420,7 +428,7 @@ cross-toolchain binary compatibility is not implied.
   `nom_c2test()` and labeled `unit`. Catch2 runs a suite's test cases in random order, so they
   must not depend on each other; `--order decl` runs them in declaration order while you look for
   such a dependency. The root enables testing and finds Catch2 before processing
-  `core/` and `apps/`, when `nom_build_tests` is enabled. Suites import the library's primary
+  `src/` and `apps/`, when `nom_build_tests` is enabled. Suites import the library's primary
   module; there is one path through the public API.
 - `tests/integration/`: checks involving project boundaries or installation, labeled `integration`.
   `library_usage/` is a separate CMake project that compiles, links and runs against this library.

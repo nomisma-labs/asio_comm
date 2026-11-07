@@ -7,8 +7,8 @@
 # Creates <name> and its alias nom::<name>. Nomisma library APIs are declared in MODULES.
 # Without SOURCES or MODULES it is an INTERFACE target for macros or dependency adapters.
 # STATIC/SHARED selects compiled linkage explicitly; otherwise
-# BUILD_SHARED_LIBS supplies the default. HEADERS and MODULES become file sets rooted at BASE_DIR (default:
-# <project>/core), so they install under the same path they are included by: <name>/file.h.
+# BUILD_SHARED_LIBS supplies the default. HEADERS and MODULES become file sets rooted at BASE_DIR.
+# BASE_DIR defaults to <project>/src. Installed paths remain <name>/file.h.
 # COMPILE_OPTIONS are PRIVATE for compiled libraries and INTERFACE for header-only targets.
 # IMPORT_STD enables standard-library modules and requires a compiled library.
 function(nom_lib name)
@@ -29,7 +29,7 @@ function(nom_lib name)
         set(linkage SHARED)
     endif()
     if(NOT arg_BASE_DIR)
-        set(arg_BASE_DIR ${PROJECT_SOURCE_DIR}/core)
+        set(arg_BASE_DIR "${PROJECT_SOURCE_DIR}/src")
     endif()
 
     if(arg_SOURCES OR arg_MODULES)

@@ -41,11 +41,13 @@ git push
 `tools/init_project.py <name>` turns the copy into an empty repo. It removes the template's example
 code instead of renaming it:
 
-- deletes the example code (`core/example/`, `apps/hello/`, `apps/boost_example/`, the example
+- deletes the example code (`src/example/`, `apps/hello/`, `apps/boost_example/`, the example
   unit tests and library usage test project, root `pyproject.toml`, `python/`, the nlohmann
   submodule), the lab (the sandbox experiments, `docs/lab/`) and the template-only files
   (`docker/`, the `ci-image` and `ci-template` workflows, the kit's own tests in `tests/kit/`,
   `tools/toolchain_updates.py`, and itself);
+- retains an empty `src/` source container, registered in the root `CMakeLists.txt`;
+  put each library under `src/<component>/`;
 - retains optional Python packaging helpers and pinned build-tool requirements; generated repos
   start without a Python package and add one using [howto.md](howto.md#a-python-package);
 - deletes the lines and blocks the template marks as template-only;
@@ -91,7 +93,8 @@ dependencies between derived repos.
 Template-owned paths are the kits (`cmake/kit/`, `tools/kit/`, `docs/kit/`), `bootstrap.sh`,
 `.clang-format`, `.clang-tidy`, `.clangd`, `.editorconfig` and `.github/workflows/ci.yml`.
 Change them only in `cmake_template`; a repo keeps its own CMake files in `cmake/<repo>/`, and
-its tools and docs in `tools/` and `docs/`, outside the kits. To bring a repo up to date:
+its tools in `tools/<repo>/` and docs in `docs/<repo>/`, outside the kits. These directories
+have no additional layer grouping. To bring a repo up to date:
 
 ```bash
 python3 tools/kit/sync_template.py      # to the newest release, or --to <release tag>
@@ -115,14 +118,20 @@ The script syncs from the template commit recorded in `.template_ref`:
 
 The target release's copy of the script does the work, so the file list and the rules come from
 the release being synced to. The script syncs the repo of the current directory, so any copy of
-it can run a sync, for example `python3 ../cmake_template/tools/kit/sync_template.py`.
+it can run a sync, for example `python3 /path/to/cmake_template/tools/kit/sync_template.py`.
 
 The sync transfers shared build rules and guidance, not repository-owned code. A change to the
 composition policy therefore has two parts: sync the template-owned paths, then migrate the
-repo's `core/`, apps, tests and CMake target declarations to that policy. For the native module
+repo's `src/`, apps, tests and CMake target declarations to that policy. For the native module
 transition, move library declarations into interfaces or partitions, and make all consumers
 import the primary module. Keep macro and dependency
 headers where their boundary requires them, and validate source and installed-package usage.
+
+When adopting the `src/` layout, move the repository's library sources and update its root
+`CMakeLists.txt` and any explicit source paths. Coordinate internal dependency pins: the
+outermost kit supplies helpers for the whole build, so a dependency still using `core/`
+must also migrate or declare its file-set `BASE_DIR` explicitly. Recreate build trees and
+compilation databases after the moves; kit synchronization does not perform these steps.
 
 The script syncs committed template revisions, not uncommitted working-tree changes. While
 reviewing an unpublished template change, keep its shared files in the template checkout;

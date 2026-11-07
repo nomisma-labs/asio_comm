@@ -59,7 +59,7 @@ public:
 
     template <typename Config>
     explicit app_terminator(const Config& config)
-        : signals_(nom::ctx(this).io, SIGINT, SIGTERM), exit_after_sec_(config.exit_after_sec),
+        : signals_(nom::ctx(this).io.get_executor(), SIGINT, SIGTERM), exit_after_sec_(config.exit_after_sec),
           require_completion_(config.require_completion)
     {
     }

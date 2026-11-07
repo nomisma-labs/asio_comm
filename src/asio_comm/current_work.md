@@ -109,7 +109,7 @@ contexts, worker threads, affinity, and cross-thread queues only when required. 
 not inherently own an OS thread.
 
 The existing Assembly relay remains synchronous routing within a domain. Its
-[`pass_response()` implementation](../../external/assembly/core/assembly/relay.cppm) directly
+[`pass_response()` implementation](../../external/assembly/src/assembly/relay.cppm) directly
 invokes the receiving node. Crossing domains must be an explicit queued operation with owned
 data; placing two domains on the same thread must not turn that queue into an inline call.
 

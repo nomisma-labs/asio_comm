@@ -1,8 +1,8 @@
 # WebSocket
 
-This records the public [module interface](../../core/asio_comm/web_socket.cppm),
-[parameters](../../core/asio_comm/ws_params.cppm), and
-the [session implementation](../../core/asio_comm/web_socket.cpp). The diagram describes
+This records the public [module interface](../../src/asio_comm/web_socket.cppm),
+[parameters](../../src/asio_comm/ws_params.cppm), and
+the [session implementation](../../src/asio_comm/web_socket.cpp). The diagram describes
 one `web_socket::session`. The wrapper constructs its first session eagerly; the first
 `connect()` starts that session, and later attempts close and replace the previous session. Usage examples are in the [WebSocket example README](../../apps/web_socket_example/README.md).
 Usage constraints, deferred work and validation coverage follow the event descriptions.
@@ -396,7 +396,7 @@ These are outputs of the current machine, shown as actions on edges:
   it. Queued sends and backpressure are outside the current API. Interaction with pending ping
   or automatic control-frame writes still needs review: serialized handlers alone do not
   prevent asynchronous operations from overlapping. The receive-callback resubscription cases
-  passed; [WS-03](../../core/asio_comm/ws_current_work.md#ws-03) is closed as unconfirmed. Conditional
+  passed; [WS-03](../../src/asio_comm/ws_current_work.md#ws-03) is closed as unconfirmed. Conditional
   buffering and a send gate are deferred pending a reproducible failure or an explicit API requirement.
 - **Liveness and data freshness.** Active/passive control-Ping policies monitor connection
   availability. Data-freshness monitoring belongs to the subscriber, which can distinguish
@@ -404,7 +404,7 @@ These are outputs of the current machine, shown as actions on edges:
   [subscriber-owned timer](timer.md), refresh it only for relevant data, and choose the timeout
   and close/reconnect policy there. The WebSocket client does not close merely because data is
   quiet; Beast's idle timeout and automatic idle Pings remain disabled.
-  Live Ping/network-loss validation remains pending in [WS-06](../../core/asio_comm/ws_current_work.md#ws-06).
+  Live Ping/network-loss validation remains pending in [WS-06](../../src/asio_comm/ws_current_work.md#ws-06).
   Active/passive deadlines use generation-based cancellation through `nom::timer`.
   The connection attempt has a separate DNS-through-upgrade deadline, including when both Ping policies are disabled.
 - **Exceptions after connection — deferred.** Read/ping/timer initiation, control-callback

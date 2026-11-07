@@ -7,4 +7,4 @@ nom_lib(asio_comm IMPORT_STD
     PUBLIC_DEPS nom::base_url nom::assembly Boost::headers OpenSSL::SSL Threads::Threads
     PRIVATE_DEPS nom::base_enum nom::spd_logger Boost::url)
 
-nom_install_package(TARGETS asio_comm DEPENDENCIES "base 0.3" assembly spd_logger "Boost 1.90 CONFIG COMPONENTS url" OpenSSL Threads)
+nom_install_package(TARGETS asio_comm DEPENDENCIES "base 0.4" "assembly 0.5" "spd_logger 0.7" "Boost 1.90 CONFIG COMPONENTS url" OpenSSL Threads)

@@ -61,7 +61,7 @@ N=1/3/100, fragmented input, interleaved pings, acknowledgement exclusion, exact
 one connection, and continued data for both symbols. It also checks arguments and help output.
 The harness bounds execution and judges the result; it needs no Binance access.
 
-The [WS-03 investigation](../../../core/asio_comm/ws_current_work.md#ws-03) is closed as unconfirmed
+The [WS-03 investigation](../../../src/asio_comm/ws_current_work.md#ws-03) is closed as unconfirmed
 and records the passing baseline and conditions for reopening. These tests do not establish
 that every possible operation overlap is safe.
 For continuous subscriptions without a transition, use the

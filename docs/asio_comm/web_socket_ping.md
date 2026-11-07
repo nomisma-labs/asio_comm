@@ -3,8 +3,8 @@
 This document describes the control-Ping design implemented by `nom::web_socket`, its active
 probe state machine, and the application heartbeat policies used by exchange adapters.
 See [WebSocket](web_socket.md) for the connection lifecycle and general interface contract,
-[ws_params](../../core/asio_comm/ws_params.cppm) for configuration, and the
-[session implementation](../../core/asio_comm/web_socket.cpp) for event handling.
+[ws_params](../../src/asio_comm/ws_params.cppm) for configuration, and the
+[session implementation](../../src/asio_comm/web_socket.cpp) for event handling.
 
 Transport activity, exchange heartbeat health, and useful application progress are separate
 observations. A control Pong does not establish that subscriptions are working, and a healthy
@@ -68,7 +68,7 @@ heartbeats. [Beast timeouts](https://www.boost.org/doc/libs/latest/libs/beast/do
 
 ### Scheduling and ownership
 
-The [session implementation](../../core/asio_comm/web_socket.cpp) owns active/passive Ping
+The [session implementation](../../src/asio_comm/web_socket.cpp) owns active/passive Ping
 scheduling and deadlines; Beast reads control frames, writes Pings and automatically replies
 to server Pings. Enabled policies and continuous reading start after a successful handshake
 and an `on_connected` callback that leaves the session connected. Active probing and passive
@@ -303,7 +303,7 @@ observation and manual Ping sending are also outside the current interface.
 `send()` blocks and reports local write completion. A blocking write or long delegate callback
 can delay reads, automatic Pongs, application replies and timers. Bounded response times under
 a stalled peer may require an owned, bounded asynchronous send path; that remains separate
-work, with [WS-03](../../core/asio_comm/ws_current_work.md#ws-03) closed as unconfirmed.
+work, with [WS-03](../../src/asio_comm/ws_current_work.md#ws-03) closed as unconfirmed.
 Queue acceptance, local write completion and exchange acknowledgement are distinct events.
 Data/control/close operations need coordination; prioritizing a heartbeat between queued
 messages cannot preempt bytes already being written.
@@ -318,7 +318,7 @@ Subscribers classify useful updates and refresh their own [`nom::timer`](timer.m
 messages, excluding application heartbeats and acknowledgements. Each subscriber owns the
 inactivity diagnostic and close/reconnect decision. A busy symbol must not hide another
 subscription's stalled data. Heartbeat health and a quiet private feed are separate concerns.
-The broader [execution abstraction](../../core/asio_comm/current_work.md) remains separate work.
+The broader [execution abstraction](../../src/asio_comm/current_work.md) remains separate work.
 
 ## Validation and implementation boundaries
 
@@ -337,4 +337,4 @@ Live/network-loss checks, subscription bursts, heartbeat delays behind large/sta
 rate limits, token renewal and planned server disconnects remain validation boundaries.
 Simulated order replies suffice for heartbeat tests; live orders are unnecessary. Connection
 deadline coverage and live/network-loss validation are tracked in
-[WS-06](../../core/asio_comm/ws_current_work.md#ws-06).
+[WS-06](../../src/asio_comm/ws_current_work.md#ws-06).

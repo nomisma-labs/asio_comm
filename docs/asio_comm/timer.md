@@ -53,7 +53,7 @@ backend cancellation exceptions after logical invalidation.
 The current timer and example are **complete**. HTTPS deadlines and WebSocket connection and
 active/passive Ping waits use this timer. Backend-neutral execution, virtual time and replacing
 the emergency logging block with the planned `FATAL` helper are
-[separate follow-up work](../../core/asio_comm/current_work.md#https-timer-completion).
+[separate follow-up work](../../src/asio_comm/current_work.md#https-timer-completion).
 
 Validation covers deferred expiry, queued-success cancellation/rearm after a delayed dispatch,
 capture release, moves and moved-from reuse, callback reentry/destruction, independent timers

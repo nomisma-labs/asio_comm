@@ -38,19 +38,25 @@ parameters**, so compile-time parameters stand out. Macros are UPPER_CASE, and n
 
 ## Files, directories, includes, modules, tests
 
+All libraries use `src/` as their source root, regardless of architectural layer.
+`<component>` identifies the library and normally matches `<repo>` for a repository's main
+library. A repository can contain several components under `src/`.
+
 | Item | Rule | Example |
 |---|---|---|
 | Repo, directory and file names | `snake_case` | `cmake_template`, `custom_traits.cppm` |
 | Extensions | `.cppm` module interface or partition, `.cpp` implementation unit or ordinary source, `.h` macro or dependency header, `_test.cxx` test | `relay_test.cxx` |
-| Library sources | `core/<repo>/…` | `core/assembly/relay.cppm` |
+| Library sources | `src/<component>/…` | `src/assembly/relay.cppm`, `src/asio_comm/timer.cppm` |
 | Imports | Nomisma library API through its primary module | `import nom.assembly;` |
-| Includes | Remaining public headers use `<repo/file.h>`; name clashes are handled case by case | `#include <example/macros.h>` |
+| Includes | Remaining public headers use `<component/file.h>` without the `src/` prefix; name clashes are handled case by case | `#include <example/macros.h>` |
 | One concept per file | The file is named after it | `relay.cppm`, `constructible.cppm` |
-| Primary module | `nom.<repo>`, file `core/<repo>/<repo>.cppm` | `export module nom.assembly;` |
-| Module partition | `nom.<repo>:<part>`, file `core/<repo>/<part>.cppm` | `export module nom.assembly:relay;` |
+| Primary module | Usually `nom.<component>`, file `src/<component>/<component>.cppm` | `export module nom.assembly;` |
+| Module partition | `nom.<component>:<part>`, file `src/<component>/<part>.cppm` | `export module nom.assembly:relay;` |
 | Unit tests | `tests/unit/<suite>/<file>_test.cxx`, or inline next to the code at `<code dir>/tests/<suite>/<file>_test.cxx`; created with `nom_c2test()` and labeled `unit`. One executable per suite, target `<project>_<suite>`; test-only headers are `<name>_test.h`. | `tests/unit/assembly/relay_test.cxx` |
 | Integration tests | `tests/integration/<scenario>/`, with C++ sources named `<file>_test.cxx`, labeled `integration`; library usage tests build a separate CMake project against the library. | `tests/integration/library_usage/` |
 | Apps | `apps/<app>/main.cpp`, with optional `apps/<app>/config/` staged into the build tree | `apps/relay_handler_contract/` |
+| Repository documentation | `docs/<repo>/`, alongside shared `docs/kit/`; no layer subdirectories | `docs/asio_comm/` |
+| Repository tools | `tools/<repo>/`, alongside shared `tools/kit/`; no layer subdirectories | `tools/json_config/` |
 
 Use `*.cpp` to select regular C++ sources and `*_test.cxx` to select C++ test sources.
 This applies to unit, inline, and integration tests. Test-only headers use `_test.h`.

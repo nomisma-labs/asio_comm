@@ -14,4 +14,4 @@ if [[ ! -f build/clang/compile_commands.json ]]; then
     echo "no C++ to check yet" # CMake writes no database for a repo without sources
     exit 0
 fi
-"${RUN_CLANG_TIDY:-run-clang-tidy-22}" -quiet -p build/clang "$(pwd)/(core|apps|tests)/"
+"${RUN_CLANG_TIDY:-run-clang-tidy-22}" -quiet -p build/clang "$(pwd)/(src|apps|tests)/"

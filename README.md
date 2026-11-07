@@ -13,7 +13,8 @@ examples, and a live connectivity test runner.
 - [HTTPS](docs/asio_comm/https.md): asynchronous HTTP/1.1 requests, bounded queuing and deadlines.
 - [Timer](docs/asio_comm/timer.md): one-shot scheduling with generation-safe cancellation.
 
-The library target is `nom::asio_comm`; its C++ module is `nom.asio_comm`.
+Library sources are in `src/asio_comm/`. The library target is `nom::asio_comm`;
+its C++ module is `nom.asio_comm`.
 
 ## Example applications
 
@@ -46,9 +47,9 @@ zlib development package to handle compressed application heartbeats.
 
 | Repository | Pin |
 |---|---|
-| `base` | `v0.3.0` |
-| `spd_logger` | `v0.5.0` |
-| `assembly` | `v0.4.0` |
+| `base` | `v0.4.0` |
+| `spd_logger` | `v0.7.0` |
+| `assembly` | `v0.5.0` |
 
 ## Documentation
 

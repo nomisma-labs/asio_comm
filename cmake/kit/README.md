@@ -29,7 +29,8 @@ See [standard-library modules](../../docs/kit/build.md#modules) for consumer set
 | [templates/](templates/) | Templates used to generate installed CMake package metadata. Dependency-specific templates stay with their service in `deps/`. |
 | [presets.json](presets.json) | The shared configure, build, test and workflow presets. Each repo's `CMakePresets.json` includes it and adds its own. |
 
-For a library defined in `core/prices/CMakeLists.txt`:
+Put libraries in `src/<component>/`, regardless of their architectural layer. For example,
+a library defined in `src/prices/CMakeLists.txt`:
 
 ```cmake
 nom_lib(prices IMPORT_STD
@@ -42,6 +43,11 @@ nom_install_package(TARGETS prices)
 This defines the library and its `nom::prices` alias. `MODULES` lists C++ module interfaces;
 `SOURCES` lists compiled implementation files. The install helper lets downstream C++ projects
 use `find_package(<project> CONFIG REQUIRED)` and link `nom::prices`.
+
+`nom_lib()` defaults `BASE_DIR` to `${PROJECT_SOURCE_DIR}/src`. Pass an explicit `BASE_DIR`
+for another layout. Module and target names are independent of this directory; installed
+headers keep paths relative to the base, such as `<component>/file.h`. The scaffold registers
+`src/`, which remains empty until a library is added.
 
 For an application in `apps/capture/CMakeLists.txt`:
 

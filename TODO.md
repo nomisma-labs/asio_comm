@@ -2,8 +2,8 @@
 
 ## Work plans
 
-- [Communication work status and execution/simulation proposal](core/asio_comm/current_work.md)
-- [WebSocket stages and deferred validation](core/asio_comm/ws_current_work.md)
+- [Communication work status and execution/simulation proposal](src/asio_comm/current_work.md)
+- [WebSocket stages and deferred validation](src/asio_comm/ws_current_work.md)
 
 ## Connectivity automation
 

@@ -28,8 +28,8 @@ Defaults and argument parsing live in [config.h](config.h). `app_config::validat
 
 ## Using the client
 
-The client has a [module interface](../../core/asio_comm/web_socket.cppm) and a private
-[implementation unit](../../core/asio_comm/web_socket.cpp).
+The client has a [module interface](../../src/asio_comm/web_socket.cppm) and a private
+[implementation unit](../../src/asio_comm/web_socket.cpp).
 Link `nom::asio_comm` and `import nom.asio_comm;`. It uses base's
 `NOM_ENUM` and `nom::url`, Assembly's `nom::delegate`, and the shared logger.
 

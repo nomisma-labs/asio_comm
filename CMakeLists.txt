@@ -7,7 +7,7 @@ include(cmake/kit/std_modules.cmake)
 
 # The version lives only here; releases are tagged v<version> (docs/kit/build.md#versioning).
 project(asio_comm
-    VERSION 0.2.0
+    VERSION 0.3.0
     DESCRIPTION "C++ communication protocols for cryptocurrency exchanges"
     LANGUAGES CXX)
 
@@ -41,7 +41,7 @@ if(nom_build_tests)
     nom_find_catch2()
 endif()
 
-add_subdirectory(core)
+add_subdirectory(src)
 
 if(nom_build_apps)
     add_subdirectory(apps)

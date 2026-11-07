@@ -6,6 +6,27 @@ and versions follow [Semantic Versioning](https://semver.org); how to release:
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-08
+
+### Changed
+
+- Move library sources from `core/` to `src/` and synchronize the shared build kit with
+  `cmake_template v0.13.0`. Module names, CMake targets and installed paths remain unchanged.
+- Pin `base v0.4.0`, `assembly v0.5.0` and `spd_logger v0.7.0`, including the nested
+  `base` dependency, and update installed-package dependency requirements.
+
+### Fixed
+
+- Construct the shared application signal handler from the I/O executor, avoiding GCC 16's
+  false uninitialized-context warning in optimized feeder and provider builds.
+
+### Upgrade
+
+- Recreate existing build directories and compilation databases after updating submodules.
+- Source consumers must use the migrated dependencies with the `cmake_template v0.13.0`
+  helpers (or newer compatible helpers); installed-package consumers must provide the
+  dependency versions listed above.
+
 ## [0.2.0] - 2026-11-05
 
 ### Added

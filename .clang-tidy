@@ -4,7 +4,7 @@
 # Naming convention check (docs/kit/conventions.md). Run: tools/kit/checks/naming.sh
 Checks: '-*,readability-identifier-naming'
 WarningsAsErrors: 'readability-identifier-naming'
-HeaderFilterRegex: '/(core|apps|tests)/'
+HeaderFilterRegex: '/(src|apps|tests)/'
 CheckOptions:
   readability-identifier-naming.NamespaceCase:                 lower_case
   readability-identifier-naming.ClassCase:                     lower_case

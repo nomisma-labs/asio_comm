@@ -1,7 +1,8 @@
 # Shared docs
 
 The docs every Nomisma repo gets from `cmake_template`, which owns them;
-`tools/kit/sync_template.py` keeps them in step. A repo's own docs go in `docs/`, outside the kit.
+`tools/kit/sync_template.py` keeps them in step. A repo's own docs go in `docs/<repo>/`,
+outside the kit and without a layer directory.
 
 - [agents.md](agents.md): the rules for agents in every repo; each `AGENTS.md` imports it.
 - [conventions.md](conventions.md): naming, files, includes, modules, CMake names and how they are

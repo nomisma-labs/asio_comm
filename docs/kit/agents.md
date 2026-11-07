@@ -22,8 +22,10 @@ repo's `AGENTS.md` imports it and adds the repo's own rules.
 
 ## Layout
 
-- `core/<repo>/`: the library. Its public API is the named module `nom.<repo>`; module
-  interfaces and partitions use `.cppm`, implementation units use `.cpp`.
+- `src/<component>/`: libraries in every architectural layer, declared with `nom_lib()`.
+  Public APIs use named modules, with `.cppm` interfaces/partitions and `.cpp` implementation
+  units. The main component normally shares its repository name, including module `nom.<repo>`.
+  The source root is relative to the current repository, independently of its workspace location.
 - `apps/<app>/`: executables; optional `config/` is collected into `build/<preset>/config/<app>/` and installed with the app.
 - `apps/sandbox/`: experiments, normally `BUILD_FOR complete`; also buildable explicitly in other presets.
   They are git-ignored and stay in the clone; don't commit one unless asked.
@@ -37,8 +39,8 @@ repo's `AGENTS.md` imports it and adds the repo's own rules.
   `CMakePresets.json` includes `cmake/kit/presets.json`.
 - `tools/kit/`: the shared checks and scripts ([tools/kit/README.md](../../tools/kit/README.md)).
 - `docs/kit/`: these shared docs ([docs/kit/README.md](README.md)).
-- A repo's own CMake files go in `cmake/<repo>/`, its tools and docs in `tools/` and `docs/`,
-  outside the kits.
+- A repo's own CMake files go in `cmake/<repo>/`, its tools in `tools/<repo>/`, and its docs
+  in `docs/<repo>/`, outside the kits. Docs and tools have no additional layer directories.
 
 ## Adding code
 

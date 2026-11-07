@@ -2,7 +2,7 @@
 
 The shared tools every Nomisma repo gets from `cmake_template`. They are template-owned: change
 them in `cmake_template`, and `sync_template.py` brings them to the other repos. A repo's own
-tools go in `tools/`, outside the kit.
+tools go in `tools/<repo>/`, outside the kit and without a layer directory.
 
 | Tool | Use |
 |---|---|

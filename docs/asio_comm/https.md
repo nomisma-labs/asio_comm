@@ -6,7 +6,7 @@ Assembly/relay integration and submitting another request from a response callba
 
 The current implementation and example are **complete**. Synchronous send, pipelining,
 batching, the sending-workflow diagram and the broader exception audit are
-[deferred follow-ups](../../core/asio_comm/current_work.md#https-timer-completion).
+[deferred follow-ups](../../src/asio_comm/current_work.md#https-timer-completion).
 
 The constructor accepts an Asio executor and `nom::url` with an `https` scheme. The client owns
 one origin, reuses its TLS context across connection attempts, verifies the trust chain and
