@@ -48,7 +48,7 @@ zlib development package to handle compressed application heartbeats.
 | Repository | Pin |
 |---|---|
 | `base` | `v0.4.0` |
-| `spd_logger` | `v0.7.0` |
+| `spd_logger` | `v0.8.0` |
 | `assembly` | `v0.5.0` |
 
 ## Documentation

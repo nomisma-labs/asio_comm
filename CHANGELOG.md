@@ -6,6 +6,13 @@ and versions follow [Semantic Versioning](https://semver.org); how to release:
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-11-08
+
+### Changed
+
+- Pin `spd_logger v0.8.0` for no-throw `LERROR` and `LALWAYS` calls and update the
+  installed-package dependency requirement.
+
 ## [0.3.0] - 2026-11-08
 
 ### Changed
