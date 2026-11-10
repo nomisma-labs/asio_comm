@@ -1,9 +1,3 @@
-[submodule "external/base"]
-	path = external/base
-	url = ../base.git
-[submodule "external/spd_logger"]
-	path = external/spd_logger
-	url = ../spd_logger.git
-[submodule "external/assembly"]
-	path = external/assembly
-	url = ../assembly.git
+[submodule "external/nom_core"]
+	path = external/nom_core
+	url = ../nom_core.git

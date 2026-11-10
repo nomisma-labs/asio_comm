@@ -35,10 +35,16 @@ See the [build guide](docs/kit/build.md) for toolchain requirements, presets and
 
 ## Dependencies
 
-The repositories under `external/` are pinned Git submodules and are loaded through
-`FetchContent`. `base` supplies shared utilities and configuration types,
-`spd_logger` provides synchronous logging, and `assembly` provides
-application composition and event routing.
+The sole direct Git submodule is `external/nom_core`, loaded through `FetchContent`.
+It pins `base`, `assembly`, `spd_logger`, and `json_config` together and makes their
+component targets available. Initialize submodules recursively to fetch the complete set.
+`base` supplies shared utilities and configuration types, `spd_logger` provides
+synchronous logging, and `assembly` provides application composition and event routing.
+`json_config` is available through the core bundle but is not used by `asio_comm`.
+
+Targets link the individual components they use. Installed `asio_comm` packages find
+those component packages directly; `nom_core` currently supplies source dependency
+integration without an umbrella library target or installed package.
 
 The communication clients also use Boost.Asio/Beast and OpenSSL. Install the OpenSSL development
 package and a system CA certificate bundle; the loopback integration test also uses the
@@ -47,9 +53,9 @@ zlib development package to handle compressed application heartbeats.
 
 | Repository | Pin |
 |---|---|
-| `base` | `v0.4.0` |
-| `spd_logger` | `v0.8.0` |
-| `assembly` | `v0.5.0` |
+| `nom_core` | `c5e1a2a` |
+
+See [nom_core's dependency list](external/nom_core/README.md#dependencies) for its component pins.
 
 ## Documentation
 

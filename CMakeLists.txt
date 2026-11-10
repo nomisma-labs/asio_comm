@@ -7,27 +7,18 @@ include(cmake/kit/std_modules.cmake)
 
 # The version lives only here; releases are tagged v<version> (docs/kit/build.md#versioning).
 project(asio_comm
-    VERSION 0.3.1
+    VERSION 0.4.0
     DESCRIPTION "C++ communication protocols for cryptocurrency exchanges"
     LANGUAGES CXX)
 
 include(cmake/kit/nom_kit.cmake)
 nom_project_options()
 
-# Dependencies come from external/ submodules (docs/kit/howto.md#a-dependency). In a superbuild the
-# outermost FetchContent_Declare wins, so every repo shares one copy.
-
-nom_require_submodule(external/base)
-FetchContent_Declare(base SOURCE_DIR ${PROJECT_SOURCE_DIR}/external/base)
-FetchContent_MakeAvailable(base)
-
-nom_require_submodule(external/spd_logger)
-FetchContent_Declare(spd_logger SOURCE_DIR ${PROJECT_SOURCE_DIR}/external/spd_logger)
-FetchContent_MakeAvailable(spd_logger)
-
-nom_require_submodule(external/assembly)
-FetchContent_Declare(assembly SOURCE_DIR ${PROJECT_SOURCE_DIR}/external/assembly)
-FetchContent_MakeAvailable(assembly)
+# nom_core selects the core component versions and makes their targets available.
+# In a superbuild the outermost FetchContent_Declare still selects each shared repo.
+nom_require_submodule(external/nom_core)
+FetchContent_Declare(nom_core SOURCE_DIR ${PROJECT_SOURCE_DIR}/external/nom_core)
+FetchContent_MakeAvailable(nom_core)
 
 # Boost comes from system packages (docs/kit/build.md#dependencies).
 nom_find_boost()

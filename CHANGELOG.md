@@ -6,6 +6,22 @@ and versions follow [Semantic Versioning](https://semver.org); how to release:
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-11
+
+### Changed
+
+- Use `nom_core` as the sole direct repository dependency. It selects `base`, `assembly`,
+  `spd_logger` and `json_config` together, making their targets available to source consumers.
+- Keep explicit component target links and installed-package dependencies; the communication
+  API is unchanged.
+
+### Upgrade
+
+- Run `git submodule update --init --recursive` to populate `external/nom_core` and its
+  dependencies. Recreate build directories so cached dependency paths use the new layout.
+- Consumers can obtain communication and core components through one `asio_comm` submodule.
+  Continue linking the component targets used by each library or application.
+
 ## [0.3.1] - 2026-11-08
 
 ### Changed
