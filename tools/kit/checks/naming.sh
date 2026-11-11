@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-FileCopyrightText: 2026 Alexey Tkachenko
-# SPDX-License-Identifier: LicenseRef-Nomisma-Labs-Proprietary
+# SPDX-License-Identifier: MIT
 #
 # Checks naming (.clang-tidy) over the clang preset's compilation database. It builds first:
 # clang-tidy needs the compiled module interfaces to parse code that imports them.

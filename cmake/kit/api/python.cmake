@@ -1,5 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Alexey Tkachenko
-# SPDX-License-Identifier: LicenseRef-Nomisma-Labs-Proprietary
+# SPDX-License-Identifier: MIT
 
 # nom_python_module(<target> [IMPORT_STD] MODULE_NAME <name> PACKAGE <dotted-name>
 #                   SOURCES <files> [DEPS <targets>] [RUNTIME_LIBRARIES <shared-targets>])

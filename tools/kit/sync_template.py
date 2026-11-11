@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: 2026 Alexey Tkachenko
-# SPDX-License-Identifier: LicenseRef-Nomisma-Labs-Proprietary
+# SPDX-License-Identifier: MIT
 """Brings this repo's template-owned files up to a cmake_template release.
 
     python3 tools/kit/sync_template.py [--to <tag or commit>] [--overwrite] [--template-url <url>]

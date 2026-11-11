@@ -1,5 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Alexey Tkachenko
-# SPDX-License-Identifier: LicenseRef-Nomisma-Labs-Proprietary
+# SPDX-License-Identifier: MIT
 
 # nom_lib(<name> [STATIC | SHARED] [IMPORT_STD] [SOURCES <files>] [HEADERS <files>] [MODULES <files>] [BASE_DIR <dir>]
 #                 [PUBLIC_DEPS <targets>] [PRIVATE_DEPS <targets>] [COMPILE_OPTIONS <options>])

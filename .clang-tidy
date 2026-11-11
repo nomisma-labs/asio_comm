@@ -1,5 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Alexey Tkachenko
-# SPDX-License-Identifier: LicenseRef-Nomisma-Labs-Proprietary
+# SPDX-License-Identifier: MIT
 #
 # Naming convention check (docs/kit/conventions.md). Run: tools/kit/checks/naming.sh
 Checks: '-*,readability-identifier-naming'

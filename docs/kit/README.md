@@ -11,4 +11,5 @@ outside the kit and without a layer directory.
   optional native Python wheels, tests, install, versioning, checks and CI.
 - [howto.md](howto.md): recipes for adding a native module library, an app, importing tests, a
   Python package, a dependency or an experiment.
-- [new_repo.md](new_repo.md): creating a repo from `cmake_template` and keeping it in sync.
+- [new_repo.md](new_repo.md): creating a repo with an explicit license, testing creation locally,
+  and keeping its shared kit in sync.

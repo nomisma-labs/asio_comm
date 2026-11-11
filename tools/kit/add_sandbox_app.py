@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: 2026 Alexey Tkachenko
-# SPDX-License-Identifier: LicenseRef-Nomisma-Labs-Proprietary
+# SPDX-License-Identifier: MIT
 """Adds a lab experiment.
 
     python3 tools/kit/add_sandbox_app.py <name>
@@ -17,13 +17,10 @@ import re
 import sys
 from pathlib import Path
 
-from checks.headers import HEADER_LINES
-
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT))
 
-
-def header(marker: str) -> str:
-    return "".join(f"{marker} {line}\n" for line in HEADER_LINES)
+from tools.kit.project_license import header, load_policy
 
 
 def main() -> int:
@@ -40,6 +37,11 @@ def main() -> int:
     if experiment.exists():
         print(f"error: {experiment.relative_to(ROOT)} already exists", file=sys.stderr)
         return 1
+    try:
+        policy = load_policy(ROOT)
+    except (OSError, ValueError) as error:
+        print(f"error: {error}; nothing was changed", file=sys.stderr)
+        return 1
     project = re.search(r"^project\(\s*(\w+)", (ROOT / "CMakeLists.txt").read_text(), re.MULTILINE).group(1)
     # The main library normally shares the repository's name (docs/kit/howto.md#a-library).
     has_library = (ROOT / "src" / project).is_dir()
@@ -47,9 +49,9 @@ def main() -> int:
 
     experiment.mkdir()
     (experiment / "CMakeLists.txt").write_text(
-        header("#") + f"\nnom_app(sandbox_{name} SOURCES main.cpp{deps} BUILD_FOR complete)\n")
+        header("#", policy) + f"\nnom_app(sandbox_{name} SOURCES main.cpp{deps} BUILD_FOR complete)\n")
     (experiment / "main.cpp").write_text(
-        header("//") + "\n#include <cstdio>\n\nint main()\n{\n"
+        header("//", policy) + "\n#include <cstdio>\n\nint main()\n{\n"
         f'    std::puts("sandbox: {name}");\n    return 0;\n}}\n')
     print(f"added {experiment.relative_to(ROOT)} (git-ignored): build/complete/bin/sandbox_{name} "
           "after cmake --workflow --preset complete")

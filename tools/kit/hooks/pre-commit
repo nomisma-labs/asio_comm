@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-FileCopyrightText: 2026 Alexey Tkachenko
-# SPDX-License-Identifier: LicenseRef-Nomisma-Labs-Proprietary
+# SPDX-License-Identifier: MIT
 #
 # Template-owned. Git runs this before each commit once ./bootstrap.sh has pointed core.hooksPath
 # at tools/kit/hooks. It checks the staged copy of each staged file, the content the commit gets,

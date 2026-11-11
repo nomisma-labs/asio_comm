@@ -53,7 +53,7 @@ zlib development package to handle compressed application heartbeats.
 
 | Repository | Pin |
 |---|---|
-| `nom_core` | `c5e1a2a` |
+| `nom_core` | `v0.2.0` |
 
 See [nom_core's dependency list](external/nom_core/README.md#dependencies) for its component pins.
 
@@ -64,3 +64,10 @@ See [nom_core's dependency list](external/nom_core/README.md#dependencies) for i
 - [Changelog](CHANGELOG.md)
 - [TODO and work plans](TODO.md)
 - [Agent instructions](AGENTS.md)
+
+## License
+
+Project-owned code and documentation use the [Sustainable Use License 1.0](LICENSE)
+and are source available. Copyright belongs to Alexey Tkachenko. The synchronized
+build kit and any MIT exceptions listed in `project_license.json` retain their
+[MIT notice](cmake/kit/LICENSE); dependencies retain their own licenses.

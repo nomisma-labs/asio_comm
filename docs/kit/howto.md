@@ -258,8 +258,8 @@ and packaging tools. Packaging does not choose or generate the Python API.
    name = "<distribution>"
    dynamic = ["version"]
    requires-python = ">=3.10"
-   license = "LicenseRef-Nomisma-Labs-Proprietary"
-   license-files = ["LICENSE"]
+   license = "MIT"
+   license-files = ["LICENSE", "cmake/kit/LICENSE"]
 
    [tool.scikit-build]
    minimum-version = "build-system.requires"
@@ -280,7 +280,9 @@ and packaging tools. Packaging does not choose or generate the Python API.
    input = "CMakeLists.txt"
    regex = '(?s)project\s*\(\s*<repo>\s+VERSION\s+(?P<value>[0-9]+\.[0-9]+\.[0-9]+)'
    ```
-   Use the repository's license and selected Python minimum. The latter is a source requirement;
+   This is an MIT example: use the repository's selected license and include the notices for
+   all material shipped in the wheel or source archive. Keep the kit's MIT notice when shipping
+   copied template material. Use the selected Python minimum. The latter is a source requirement;
    native wheel tags still select the interpreter and platform actually built. The `nom_python`
    component is separate from the C++ SDK install and excluded from ordinary full installs.
 5. Initialize submodules, create the [packaging environment](build.md#native-python-wheels)

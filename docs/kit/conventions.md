@@ -105,7 +105,11 @@ Every source file (C++, CMake, Python, shell, YAML, Dockerfile) starts with, aft
 
 ```cpp
 // SPDX-FileCopyrightText: 2026 Alexey Tkachenko
-// SPDX-License-Identifier: LicenseRef-Nomisma-Labs-Proprietary
+// SPDX-License-Identifier: MIT
 ```
 
-using `#` instead of `//` where that is the comment syntax. The license text is in `LICENSE`.
+using `#` instead of `//` where that is the comment syntax. This example is for an MIT file.
+New project files use the copyright and license from `project_license.json`; copied kit and
+scaffold files retain MIT. The project terms are in `LICENSE`, and the kit's MIT notice is in
+`cmake/kit/LICENSE`. The checker verifies the selected license, including the staged policy
+when committing. See [license selection](new_repo.md#licensing).

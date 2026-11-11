@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-FileCopyrightText: 2026 Alexey Tkachenko
-# SPDX-License-Identifier: LicenseRef-Nomisma-Labs-Proprietary
+# SPDX-License-Identifier: MIT
 #
 # Checks C++ formatting against .clang-format. With --fix, reformats the files instead. With
 # --staged, checks the staged copy of each staged file, the content a commit would get; the

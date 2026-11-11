@@ -1,5 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Alexey Tkachenko
-# SPDX-License-Identifier: LicenseRef-Nomisma-Labs-Proprietary
+# SPDX-License-Identifier: MIT
 # Optional wheel build/test environment. Install inside a virtual environment.
 # Keep the backend pin in example/recipe pyproject.toml declarations in sync.
 pip==25.1.1

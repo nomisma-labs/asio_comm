@@ -1,5 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Alexey Tkachenko
-# SPDX-License-Identifier: LicenseRef-Nomisma-Labs-Proprietary
+# SPDX-License-Identifier: MIT
 
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
@@ -60,4 +60,7 @@ function(nom_install_package)
         ${PROJECT_BINARY_DIR}/${PROJECT_NAME}-config.cmake
         ${PROJECT_BINARY_DIR}/${PROJECT_NAME}-config-version.cmake
         DESTINATION ${config_dir})
+    # The generated package config contains MIT-licensed kit code.
+    install(FILES ${CMAKE_CURRENT_FUNCTION_LIST_DIR}/../LICENSE
+        DESTINATION ${config_dir} RENAME LICENSE-MIT.txt)
 endfunction()

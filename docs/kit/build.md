@@ -511,7 +511,7 @@ To release `x.y.z`:
 | Check | Command |
 |---|---|
 | Python environment | `python3 tools/kit/checks/python.py` |
-| SPDX headers | `python3 tools/kit/checks/headers.py` (`--staged` for the staged files) |
+| SPDX and license policy | `python3 tools/kit/checks/headers.py` (`--staged` reads staged policy and files) |
 | Formatting | `tools/kit/checks/format.sh` (`--fix` to reformat, `--staged` for the staged files) |
 | Naming | `tools/kit/checks/naming.sh` (builds `clang` with `NOM_BUILD_PRESET=complete` to cover every app) |
 | Release tag | `python3 tools/kit/checks/version.py <tag>` |

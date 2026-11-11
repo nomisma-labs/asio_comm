@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: 2026 Alexey Tkachenko
-# SPDX-License-Identifier: LicenseRef-Nomisma-Labs-Proprietary
+# SPDX-License-Identifier: MIT
 """Checks that every source file starts with the SPDX header (after an optional shebang).
 
 Covers the C++, CMake, Python, shell, YAML and Docker files and the git hooks that git knows
@@ -15,11 +15,12 @@ import subprocess
 import sys
 from pathlib import Path
 
-# The header, without its comment marker. Also used by tools/kit/add_sandbox_app.py.
-HEADER_LINES = [
-    "SPDX-FileCopyrightText: 2026 Alexey Tkachenko",
-    "SPDX-License-Identifier: LicenseRef-Nomisma-Labs-Proprietary",
-]
+ROOT = Path(__file__).resolve().parents[3]
+sys.path.insert(0, str(ROOT))
+
+from tools.kit.project_license import POLICY_FILE, expected_license, load_policy, validate_notices
+
+HEADER_TAGS = ["SPDX-FileCopyrightText", "SPDX-License-Identifier"]
 
 MARKER_BY_SUFFIX = {
     ".h": "//", ".hpp": "//", ".ipp": "//", ".cpp": "//", ".cxx": "//", ".cppm": "//",
@@ -37,8 +38,9 @@ def has_header(text: str, marker: str) -> bool:
     lines = text.splitlines()
     if lines and lines[0].startswith("#!"):
         lines = lines[1:]
-    tags = [line.split(":", 1)[0] for line in HEADER_LINES]
-    return len(lines) >= len(tags) and all(line.startswith(f"{marker} {tag}:") for line, tag in zip(lines, tags))
+    return len(lines) >= len(HEADER_TAGS) and all(
+        line.startswith(f"{marker} {tag}:") and line.split(":", 1)[1].strip()
+        for line, tag in zip(lines, HEADER_TAGS))
 
 
 def git(root: Path, *args: str) -> str:
@@ -66,16 +68,47 @@ def staged_files(root: Path) -> Iterator[tuple[str, str, str]]:
             yield name, marker, git(root, "cat-file", "blob", blob)
 
 
+def indexed_files(root: Path) -> Iterator[tuple[str, str, str]]:
+    """A policy change must also validate unchanged sources against the new selection."""
+    for entry in git(root, "ls-files", "--stage", "-z").split("\0"):
+        if not entry:
+            continue
+        metadata, name = entry.split("\t", 1)
+        mode, blob, stage = metadata.split()
+        marker = comment_marker(Path(name))
+        if marker and mode in ("100644", "100755") and stage == "0":
+            yield name, marker, git(root, "cat-file", "blob", blob)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--staged", action="store_true", help="check the staged copy of each staged file")
     args = parser.parse_args()
-    root = Path(__file__).resolve().parents[3]
-    files = staged_files(root) if args.staged else working_files(root)
+    try:
+        policy = load_policy(ROOT, args.staged)
+        validate_notices(ROOT, policy, args.staged)
+    except (OSError, ValueError) as error:
+        print(f"license policy: {error}", file=sys.stderr)
+        return 1
+    if args.staged:
+        changed_policy = git(ROOT, "diff", "--cached", "--name-only", "--", POLICY_FILE, "LICENSE").strip()
+        files = list(indexed_files(ROOT) if changed_policy else staged_files(ROOT))
+    else:
+        files = list(working_files(ROOT))
     missing = [name for name, marker, text in files if not has_header(text, marker)]
     for name in missing:
         print(f"missing SPDX header: {name}")
-    return 1 if missing else 0
+    invalid = []
+    for name, marker, text in files:
+        if name in missing:
+            continue
+        lines = text.splitlines()[1:] if text.startswith("#!") else text.splitlines()
+        actual = lines[1].split(":", 1)[1].strip()
+        expected = expected_license(name, policy)
+        if actual != expected:
+            invalid.append(name)
+            print(f"wrong SPDX license: {name}: expected {expected}, found {actual}")
+    return 1 if missing or invalid else 0
 
 
 if __name__ == "__main__":

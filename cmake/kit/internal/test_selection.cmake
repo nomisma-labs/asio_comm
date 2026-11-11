@@ -1,5 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Alexey Tkachenko
-# SPDX-License-Identifier: LicenseRef-Nomisma-Labs-Proprietary
+# SPDX-License-Identifier: MIT
 
 # Tests carrying a label listed in NOM_SKIP_TEST_LABELS stay out of every ctest run in this build
 # tree, with or without a test preset; the dev preset leaves out the integration and kit tests.

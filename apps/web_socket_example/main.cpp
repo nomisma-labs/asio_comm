@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Alexey Tkachenko
-// SPDX-License-Identifier: LicenseRef-Nomisma-Labs-Proprietary
+// SPDX-License-Identifier: LicenseRef-Sustainable-Use-1.0
 
 // GCC 16's Ubuntu snapshot ICEs in fortified snprintf at -O2 after import std.
 // As in base's consumer test, make the stdio declarations visible before imports.

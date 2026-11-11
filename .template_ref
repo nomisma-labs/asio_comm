@@ -1,4 +1,4 @@
 # Set url to this repository's clone URL after it is hosted.
 # tools/init_project.py records both url and sha in each new repository.
 url=git@github.com:nomisma-labs/cmake_template.git
-sha=ccd09413e6a6421dd1b6b97873c1be11bc44e06e
+sha=6010891dfe72d23872cf3bb034af6f2494476d9d

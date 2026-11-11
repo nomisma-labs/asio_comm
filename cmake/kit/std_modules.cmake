@@ -1,5 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Alexey Tkachenko
-# SPDX-License-Identifier: LicenseRef-Nomisma-Labs-Proprietary
+# SPDX-License-Identifier: MIT
 
 # Include before the first project() enabling CXX, including in source/package consumers.
 # The gate is version-specific. Do not reuse it with a different CMake release series.

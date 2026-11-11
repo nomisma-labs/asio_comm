@@ -52,7 +52,9 @@ a Python package, a dependency, an experiment.
 - Follow [conventions.md](conventions.md): `snake_case` everywhere, `PascalCase` template
   parameters, UPPER_CASE only for macros. `tools/kit/checks/naming.sh` enforces the naming.
 - C++ test sources use `*_test.cxx` in both unit and integration tests; regular sources use `.cpp`.
-- Every source file starts with the SPDX header; `python3 tools/kit/checks/headers.py` checks it.
+- New project files use the SPDX copyright and license in `project_license.json`. Copied kit
+  and scaffold files retain MIT. `python3 tools/kit/checks/headers.py` checks these boundaries;
+  see [license selection](new_repo.md#licensing).
 - Format with `tools/kit/checks/format.sh --fix`.
 - Commits run the git hooks in `tools/kit/hooks/` once bootstrap has enabled them. Never skip them
   with `--no-verify`: fix what they report, stage the fixes and commit again. Commit messages carry

@@ -30,7 +30,7 @@ feature, then emptied by `tools/init_project.py`.
 ```bash
 gh repo create <org>/<name> --private --template <org>/cmake_template --clone
 cd <name>
-python3 tools/init_project.py <name>
+python3 tools/init_project.py <name> --license MIT
 ./bootstrap.sh
 git push
 ```
@@ -38,7 +38,8 @@ git push
 (In the browser: "Use this template" → "Create a new repository", then clone and continue from
 `python3 tools/init_project.py`.)
 
-`tools/init_project.py <name>` turns the copy into an empty repo. It removes the template's example
+Choose `--license MIT`, `--license SUL-1.0` or `--license proprietary` explicitly.
+`tools/init_project.py <name> --license <choice>` turns the copy into an empty repo. It removes the template's example
 code instead of renaming it:
 
 - deletes the example code (`src/example/`, `apps/hello/`, `apps/boost_example/`, the example
@@ -54,6 +55,8 @@ code instead of renaming it:
 - sets the name and version `0.1.0` in `project()`; the options and the package name derive from it;
 - puts the name and a TODO description into `README.md` and `AGENTS.md`, and starts an empty
   `CHANGELOG.md`;
+- writes the selected project's `LICENSE` and `project_license.json`, retaining MIT notices
+  on the copied toolchain and scaffold files;
 - resolves the template URL and commit, records both in `.template_ref`, and commits. If the
   URL is unset or unreachable, it stops without changing the new repo. You can provide
   `--template-url <url>` instead of setting the URL in the template.
@@ -70,6 +73,58 @@ Each derived repo declares its dependencies in its own `.gitmodules`, CMake targ
 installed-package dependency lists. Follow the [dependency recipe](howto.md#a-dependency) in
 the consuming repo. `cmake_template` supplies shared build mechanisms; it is not a registry of
 dependencies between derived repos.
+
+## Licensing
+
+The template and synchronized kit are MIT licensed. A derived project's new code can use MIT,
+Sustainable Use License 1.0 (source available), or the Nomisma proprietary notice. Repository
+visibility is a separate choice; this command does not change GitHub visibility or settings.
+
+`project_license.json` is owned by the derived repository. It records the default SPDX license
+identifier and copyright notice for new files, plus `mit_files`: the copied scaffold files
+that retain MIT after initialization. The shared kit retains MIT independently of that list.
+The sandbox generator reads the project default. The initializer accepts `--copyright "2026 Name"`
+when the project holder differs; copied MIT notices remain attributed to Alexey Tkachenko.
+
+`LICENSE` records the project terms and identifies the MIT exceptions. Keep `cmake/kit/LICENSE`
+with copied infrastructure; source packages must preserve the corresponding notices. Installed
+CMake packages include `LICENSE-MIT.txt` beside their generated package config. Project code,
+documentation and third-party notices still need to be included according to the release's contents.
+
+The header check validates the project notice, the MIT kit notice, and each checked source's
+license against this policy. `--staged` reads the staged policy and source contents; changing
+the policy or `LICENSE` also checks unchanged indexed sources. Existing repositories must add
+an explicit policy when adopting this kit; synchronization does not choose or change their license.
+For a repository whose own files still use the existing proprietary notice:
+
+```json
+{
+  "license": "LicenseRef-Nomisma-Labs-Proprietary",
+  "copyright": "2026 Alexey Tkachenko",
+  "mit_files": []
+}
+```
+
+Record any separately MIT-licensed, repository-owned files in `mit_files`. Review the project's
+actual `LICENSE` and source notices when selecting a different default; changing JSON alone
+does not perform relicensing. See the [license catalog](../../tools/kit/licenses/README.md).
+
+### Test creation locally
+
+Run this in the template checkout, including before committing toolchain changes:
+
+```bash
+python3 tests/kit/project_license/check.py --source .
+```
+
+It snapshots the working tree into a temporary local upstream, creates a fresh repository for
+each choice, runs the real initializer, generates and builds a small app, and tests a subsequent
+template sync. It also checks refusal of missing/unknown choices, incorrect and staged license
+notices, and preservation of the project's license and code. Temporary repositories are removed
+on completion, including failures. It creates no GitHub repositories, does not register workspace
+projects, and does not modify the real repository's Git history. Git transport is restricted to
+local files. Pass `--compiler`, `--cmake` or `--generator` to use another installed toolchain.
+The same check is registered as `cmake_template_project_license` in the `complete` kit tests.
 
 ## Per-repo settings
 
@@ -92,6 +147,8 @@ dependencies between derived repos.
 
 Template-owned paths are the kits (`cmake/kit/`, `tools/kit/`, `docs/kit/`), `bootstrap.sh`,
 `.clang-format`, `.clang-tidy`, `.clangd`, `.editorconfig` and `.github/workflows/ci.yml`.
+The MIT notice in `cmake/kit/LICENSE` is synchronized with the kit. The root `LICENSE`,
+`project_license.json` and repository-owned source notices are preserved.
 Change them only in `cmake_template`; a repo keeps its own CMake files in `cmake/<repo>/`, and
 its tools in `tools/<repo>/` and docs in `docs/<repo>/`, outside the kits. These directories
 have no additional layer grouping. To bring a repo up to date:

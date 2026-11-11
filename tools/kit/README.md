@@ -7,7 +7,7 @@ tools go in `tools/<repo>/`, outside the kit and without a layer directory.
 | Tool | Use |
 |---|---|
 | `checks/python.py` | Python version, script syntax and imports; bootstrap runs it before builds |
-| `checks/headers.py` | the SPDX header in every source file; `--staged` checks the staged files |
+| `checks/headers.py` | SPDX headers and project/kit license policy; `--staged` checks staged contents |
 | `checks/format.sh` | C++ formatting against `.clang-format`; `--fix` reformats, `--staged` checks the staged files |
 | `checks/naming.sh` | naming rules from `.clang-tidy`, over a `clang` build of every app |
 | `checks/version.py` | prints the version in `project()`, or checks a release tag against it |
@@ -16,6 +16,7 @@ tools go in `tools/<repo>/`, outside the kit and without a layer directory.
 | `hooks/commit-msg` | git hook: rejects `Co-Authored-By` trailers |
 | `sync_template.py` | brings the template-owned files up to a `cmake_template` release |
 | `add_sandbox_app.py` | adds an experiment in `apps/sandbox/` |
+| `project_license.py` | reads the repository's license selection and preserves MIT toolchain notices |
 | `python_package_requirements.txt` | pinned tools for optional Python wheel builds |
 
 `./bootstrap.sh` and CI run the checks ([docs/kit/build.md](../../docs/kit/build.md#checks-and-ci)),

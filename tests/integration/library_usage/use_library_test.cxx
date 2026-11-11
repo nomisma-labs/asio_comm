@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Alexey Tkachenko
-// SPDX-License-Identifier: LicenseRef-Nomisma-Labs-Proprietary
+// SPDX-License-Identifier: LicenseRef-Sustainable-Use-1.0
 
 // GCC 16's Ubuntu snapshot needs stdio declarations before these module imports at -O2.
 #if defined(__GNUC__) && !defined(__clang__) && __GNUC__ == 16
