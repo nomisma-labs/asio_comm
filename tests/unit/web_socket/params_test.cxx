@@ -8,7 +8,7 @@
 
 import std;
 import nom.asio_comm;
-import nom.spd_logger;
+import nom.core;
 
 TEST_CASE("WebSocket parameter diagnostics describe policies without exposing header values")
 {

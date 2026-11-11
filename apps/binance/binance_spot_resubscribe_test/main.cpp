@@ -5,8 +5,7 @@
 
 import std;
 import nom.asio_comm;
-import nom.assembly;
-import nom.spd_logger;
+import nom.core;
 
 #include "config.h"
 

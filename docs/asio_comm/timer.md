@@ -5,7 +5,7 @@
 See the [example](../../apps/timer_example/README.md).
 
 ```cpp
-nom::init_logger(nom::main_logger); // Once at application startup; import nom.spd_logger.
+nom::init_logger(nom::main_logger); // Once at application startup; import nom.core.
 nom::timer deadline(io.get_executor());
 deadline.arm_after(std::chrono::seconds{2}, [] {
     // Handle successful expiry.

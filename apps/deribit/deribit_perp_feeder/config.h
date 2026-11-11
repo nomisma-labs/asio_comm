@@ -4,8 +4,7 @@
 #pragma once
 
 import std;
-import nom.spd_logger;
-import nom.url;
+import nom.core;
 
 // Normalize a copy for the wire; validation leaves configured/displayed identifiers unchanged.
 inline std::string normalized_symbol(std::string symbol)
@@ -69,7 +68,7 @@ struct app_config
 inline std::vector<std::string> split_list(std::string_view value)
 {
     std::vector<std::string> result;
-    for (auto item : value | std::views::split(','))
+    for (auto item : std::views::split(value, ','))
         result.emplace_back(item.begin(), item.end());
     return result;
 }

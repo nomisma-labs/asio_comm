@@ -15,7 +15,7 @@ module;
 module nom.asio_comm;
 
 import std;
-import nom.spd_logger;
+import nom.core;
 import :http_validation;
 
 namespace nom

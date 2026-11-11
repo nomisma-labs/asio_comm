@@ -4,7 +4,7 @@
 #pragma once
 
 import std;
-import nom.url;
+import nom.core;
 
 struct app_config
 {

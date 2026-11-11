@@ -4,7 +4,7 @@
 #pragma once
 
 import std;
-import nom.spd_logger;
+import nom.core;
 
 namespace example
 {

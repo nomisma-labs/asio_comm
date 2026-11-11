@@ -12,7 +12,7 @@
 
 import std;
 import nom.asio_comm;
-import nom.spd_logger;
+import nom.core;
 
 #include "config.h"
 

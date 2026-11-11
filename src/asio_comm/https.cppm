@@ -10,8 +10,7 @@ export module nom.asio_comm:https;
 
 import std;
 export import :events;
-export import nom.url;
-export import nom.assembly;
+export import nom.core;
 
 export namespace nom
 {

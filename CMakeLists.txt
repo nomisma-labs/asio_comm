@@ -7,7 +7,7 @@ include(cmake/kit/std_modules.cmake)
 
 # The version lives only here; releases are tagged v<version> (docs/kit/build.md#versioning).
 project(asio_comm
-    VERSION 0.5.0
+    VERSION 0.6.0
     DESCRIPTION "C++ communication protocols for cryptocurrency exchanges"
     LANGUAGES CXX)
 
@@ -20,7 +20,7 @@ if(nom_install)
         DESTINATION ${CMAKE_INSTALL_DATADIR}/licenses/${PROJECT_NAME})
 endif()
 
-# nom_core selects the core component versions and makes their targets available.
+# nom_core selects the core component versions and provides the nom::core facade.
 # In a superbuild the outermost FetchContent_Declare still selects each shared repo.
 nom_require_submodule(external/nom_core)
 FetchContent_Declare(nom_core SOURCE_DIR ${PROJECT_SOURCE_DIR}/external/nom_core)

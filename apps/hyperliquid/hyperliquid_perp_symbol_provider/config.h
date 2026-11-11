@@ -4,8 +4,7 @@
 #pragma once
 
 import std;
-import nom.spd_logger;
-import nom.url;
+import nom.core;
 
 struct app_config
 {

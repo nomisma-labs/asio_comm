@@ -3,10 +3,12 @@
 
 #include <spd_logger/logging.h>
 
+// GCC 16 needs stdio declarations before module imports at -O2.
+#include <cstdio>
+
 import std;
 
-import nom.assembly;
-import nom.spd_logger;
+import nom.core;
 
 #include "config.h"
 

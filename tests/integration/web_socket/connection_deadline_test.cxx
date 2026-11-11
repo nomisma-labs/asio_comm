@@ -14,7 +14,7 @@
 
 import std;
 import nom.asio_comm;
-import nom.spd_logger;
+import nom.core;
 
 #if defined(__linux__)
 // Test-executable interposition keeps the real resolver worker busy beyond the deadline.

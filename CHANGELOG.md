@@ -6,6 +6,15 @@ and versions follow [Semantic Versioning](https://semver.org); how to release:
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-11-12
+
+### Changed
+
+- Pin `nom_core v0.3.0` and use its aggregate `nom.core` module throughout the library,
+  examples and tests, replacing separate core module imports and component target links.
+- Publicly link `nom::core` and require the `nom_core 0.3` installed package, keeping core
+  dependency selection and logging JSON mappings in the core integration repository.
+
 ## [0.5.0] - 2026-11-11
 
 ### Changed

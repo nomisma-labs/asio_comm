@@ -12,8 +12,7 @@ export module nom.asio_comm:web_socket;
 import std;
 export import :events;
 export import :ws_params;
-export import nom.url;
-export import nom.assembly;
+export import nom.core;
 
 export namespace nom
 {

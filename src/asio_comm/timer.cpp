@@ -11,7 +11,7 @@ module;
 module nom.asio_comm;
 
 import std;
-import nom.spd_logger;
+import nom.core;
 
 namespace nom
 {

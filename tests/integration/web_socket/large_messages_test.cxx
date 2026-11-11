@@ -6,7 +6,7 @@
 
 import std;
 import nom.asio_comm;
-import nom.spd_logger;
+import nom.core;
 
 int main(int argc, char** argv)
 {

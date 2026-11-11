@@ -5,7 +5,7 @@
 generation-safe timer, for connectivity to cryptocurrency exchanges. The repository includes
 public market-data feeders, WebSocket and HTTPS symbol providers, communication/timer/logging
 examples, and a live connectivity test runner. `nom_core` is the sole direct repository
-dependency and supplies the core component targets. Boost.Asio/Beast is discovered through the
+dependency and supplies the `nom.core` module and `nom::core` target. Boost.Asio/Beast is discovered through the
 shared kit; OpenSSL supplies TLS and Catch2 is available for tests.
 <!-- repo-description:end -->
 

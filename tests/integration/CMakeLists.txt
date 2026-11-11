@@ -18,19 +18,19 @@ if(nom_build_tests AND TARGET web_socket_example)
     block(SCOPE_FOR VARIABLES)
         set(nom_install OFF)
         nom_app(asio_comm_headers_client IMPORT_STD SOURCES web_socket/headers_test.cxx
-            DEPS Boost::headers nom::asio_comm nom::spd_logger)
+            DEPS Boost::headers nom::asio_comm nom::core)
         nom_app(asio_comm_disconnecting_client IMPORT_STD SOURCES web_socket/disconnecting_test.cxx
-            DEPS Boost::headers nom::asio_comm nom::spd_logger)
+            DEPS Boost::headers nom::asio_comm nom::core)
         nom_app(asio_comm_move_client IMPORT_STD SOURCES web_socket/move_test.cxx
-            DEPS Boost::headers nom::asio_comm nom::spd_logger)
+            DEPS Boost::headers nom::asio_comm nom::core)
         nom_app(asio_comm_passive_ping_client IMPORT_STD SOURCES web_socket/passive_ping_test.cxx
-            DEPS Boost::headers nom::asio_comm nom::spd_logger)
+            DEPS Boost::headers nom::asio_comm nom::core)
         nom_app(asio_comm_active_ping_client IMPORT_STD SOURCES web_socket/active_ping_test.cxx
-            DEPS Boost::headers nom::asio_comm nom::spd_logger)
+            DEPS Boost::headers nom::asio_comm nom::core)
         nom_app(asio_comm_large_messages_client IMPORT_STD SOURCES web_socket/large_messages_test.cxx
-            DEPS Boost::headers nom::asio_comm nom::spd_logger)
+            DEPS Boost::headers nom::asio_comm nom::core)
         nom_app(asio_comm_connection_deadline_client IMPORT_STD SOURCES web_socket/connection_deadline_test.cxx
-            DEPS Boost::headers nom::asio_comm nom::spd_logger ${CMAKE_DL_LIBS})
+            DEPS Boost::headers nom::asio_comm nom::core ${CMAKE_DL_LIBS})
     endblock()
 
     find_package(Python 3.10 REQUIRED COMPONENTS Interpreter)
@@ -201,9 +201,9 @@ if(nom_build_tests AND TARGET https_example)
     block(SCOPE_FOR VARIABLES)
         set(nom_install OFF)
         nom_app(asio_comm_https_client IMPORT_STD SOURCES https/client_test.cxx
-            DEPS Boost::headers nom::asio_comm nom::spd_logger)
+            DEPS Boost::headers nom::asio_comm nom::core)
         nom_app(asio_comm_https_move_client IMPORT_STD SOURCES https/move_test.cxx
-            DEPS Boost::headers nom::asio_comm nom::spd_logger)
+            DEPS Boost::headers nom::asio_comm nom::core)
     endblock()
     find_package(Python 3.10 REQUIRED COMPONENTS Interpreter)
     find_program(openssl_executable openssl REQUIRED)

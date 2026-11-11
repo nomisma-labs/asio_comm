@@ -4,8 +4,7 @@
 #pragma once
 
 import std;
-import nom.spd_logger;
-import nom.url;
+import nom.core;
 
 // Normalize a copy for the wire; validation leaves configured/displayed identifiers unchanged.
 inline std::string normalized_symbol(std::string symbol)

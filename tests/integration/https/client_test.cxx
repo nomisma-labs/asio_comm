@@ -10,7 +10,7 @@
 
 import std;
 import nom.asio_comm;
-import nom.spd_logger;
+import nom.core;
 
 void require(bool condition, std::string_view message)
 {
