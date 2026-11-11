@@ -6,6 +6,13 @@ and versions follow [Semantic Versioning](https://semver.org); how to release:
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-11-12
+
+### Changed
+
+- Pin `nom_core v0.3.1`, including the clean-history `base v0.6.0` release and the
+  updated configuration and logging dependencies. Public APIs and runtime behavior are unchanged.
+
 ## [0.6.0] - 2026-11-12
 
 ### Changed

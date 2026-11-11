@@ -52,7 +52,7 @@ zlib development package to handle compressed application heartbeats.
 
 | Repository | Pin |
 |---|---|
-| `nom_core` | `v0.3.0` |
+| `nom_core` | `v0.3.1` |
 
 See [nom_core's dependency list](external/nom_core/README.md#dependencies) for its component pins.
 
