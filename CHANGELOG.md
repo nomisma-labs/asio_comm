@@ -6,6 +6,11 @@ and versions follow [Semantic Versioning](https://semver.org); how to release:
 
 ## [Unreleased]
 
+## [0.6.2] - 2026-11-24
+
+- Support CMake 4.5 native `import std` and retain CMake 4.4 support through cmake_template v0.14.1.
+- Update dependency pins to nom_core v0.3.2.
+
 ## [0.6.1] - 2026-11-12
 
 ### Changed

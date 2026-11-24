@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: MIT
 
 # Include before the first project() enabling CXX, including in source/package consumers.
-# The gate is version-specific. Do not reuse it with a different CMake release series.
+# CMake 4.4 requires this experimental gate. CMake 4.5 supports import std through scanning.
 if(CMAKE_VERSION VERSION_GREATER_EQUAL 4.4 AND CMAKE_VERSION VERSION_LESS 4.5)
     set(CMAKE_EXPERIMENTAL_CXX_IMPORT_STD "f35a9ac6-8463-4d38-8eec-5d6008153e7d")
 endif()
@@ -11,21 +11,25 @@ endif()
 # Opt in each compiled target importing std or consuming a module that imports std.
 # Prefer IMPORT_STD in kit target helpers; use this directly for existing external targets.
 function(nom_enable_std_modules target)
-    if(CMAKE_VERSION VERSION_LESS 4.4 OR NOT CMAKE_VERSION VERSION_LESS 4.5)
-        message(FATAL_ERROR "nom_enable_std_modules requires CMake 4.4.x; "
-            "other versions need their own validated import std configuration")
-    endif()
-    if(NOT 23 IN_LIST CMAKE_CXX_COMPILER_IMPORT_STD)
-        message(FATAL_ERROR "C++23 import std support is required. Include cmake/kit/std_modules.cmake "
-            "before the first project() enabling CXX, and use Ninja with GCC 16 or Clang 22 "
-            "and installed standard-library module sources. Reconfigure an existing build with "
-            "cmake --fresh so compiler detection runs again (docs/kit/build.md#modules).")
-    endif()
     get_target_property(target_type ${target} TYPE)
     if(target_type STREQUAL "INTERFACE_LIBRARY")
         message(FATAL_ERROR "nom_enable_std_modules requires a compiled target: ${target}")
     endif()
-    set_target_properties(${target} PROPERTIES CXX_MODULE_STD ON)
+    if(CMAKE_VERSION VERSION_LESS 4.5)
+        if(NOT 23 IN_LIST CMAKE_CXX_COMPILER_IMPORT_STD)
+            message(FATAL_ERROR "CMake 4.4 requires C++23 import std support. Include "
+                "cmake/kit/std_modules.cmake before the first project() enabling CXX and "
+                "configure with cmake --fresh (docs/kit/build.md#modules).")
+        endif()
+        set_property(TARGET ${target} PROPERTY CXX_MODULE_STD ON)
+    else()
+        if(NOT EXISTS "${CMAKE_CXX_STDLIB_MODULES_JSON}")
+            message(FATAL_ERROR "C++ standard-library module metadata is required for ${target}. "
+                "Use Ninja with GCC 16 or Clang 22 and installed standard-library module sources. "
+                "${CMAKE_CXX_COMPILER_IMPORT_STD_ERROR_MESSAGE}")
+        endif()
+        set_property(TARGET ${target} PROPERTY CXX_SCAN_FOR_MODULES ON)
+    endif()
     if(NOT CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
         return()
     endif()

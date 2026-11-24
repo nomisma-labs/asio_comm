@@ -13,7 +13,8 @@ include(cmake/kit/nom_kit.cmake)
 nom_project_options()
 ```
 
-`std_modules.cmake` is the pre-project entry point for CMake 4.4.x `import std` support.
+`std_modules.cmake` sets up the CMake 4.4 experimental gate and provides the per-target
+`import std` helper for both 4.4 and native module scanning in CMake 4.5 and newer.
 `nom_kit.cmake` loads the remaining files in the required order. Pass `IMPORT_STD` to
 `nom_lib`, `nom_app`, `nom_c2test`, or `nom_python_module` for each compiled target importing
 `std` or consuming a module using it. Disabled helpers skip module setup too. Interface

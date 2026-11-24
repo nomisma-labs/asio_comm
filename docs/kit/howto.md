@@ -263,7 +263,7 @@ and packaging tools. Packaging does not choose or generate the Python API.
 
    [tool.scikit-build]
    minimum-version = "build-system.requires"
-   cmake.version = ">=4.4,<4.5"
+   cmake.version = ">=4.4"
    ninja.version = ">=1.11"
    cmake.build-type = "Release"
    wheel.packages = ["python/<package>"]

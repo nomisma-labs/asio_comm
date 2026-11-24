@@ -51,7 +51,7 @@ to clear both the main build and the nested integration-test builds that cache t
 | Ubuntu | 26.04 LTS | development and CI operating system |
 | GCC | 16 (`g++-16`); installed compiler reports 16.0.1, experimental snapshot 20260322, package `16-20260322-1ubuntu1` | the main compiler |
 | Clang tools | 22 (`clang++-22`, `clangd-22`, `clang-tidy-22`, `clang-scan-deps-22`, `clang-format-22`); Ubuntu packages `clang-22`, `clang-tools-22`, `clang-tidy-22`, `clang-format-22`, `clangd-22` | second compiler, sanitizers, IDE, checks |
-| CMake | 4.4.x for `import std`; 4.4.4 from Kitware's apt repository, locally and in CI | build |
+| CMake | 4.5.0 from Kitware's apt repository for development and the CI image definition. The kit also supports 4.4.x. | build |
 | Ninja | 1.11 or newer | generator (Makefiles can't build modules) |
 | Python | 3.10 or newer; 3.14.4 locally | repository scripts use the standard library; optional wheel builds use the separate environment below |
 | Catch2 | 3.16.1, built from source into `/usr/local`, locally and in CI | tests |
@@ -350,7 +350,7 @@ Use `MODULES` in `nom_lib()` to declare interfaces and partitions, including for
 consisting entirely of templates. The [module recipe](howto.md#a-module) shows the CMake and
 source layout.
 
-Standard-library modules use CMake 4.4.x, Ninja, GCC 16 or Clang 22, and installed standard-library
+Standard-library modules use CMake 4.4 or newer, Ninja, GCC 16 or Clang 22, and installed standard-library
 module sources (the current Linux toolchain uses libstdc++ 16). Enable detection before the first
 `project()` that enables CXX, then opt in each compiled target that imports `std` or consumes a
 module that does:
@@ -370,27 +370,23 @@ nom_c2test(prices_test IMPORT_STD SOURCES prices_test.cxx DEPS nom::prices)
 `IMPORT_STD` is an explicit option on `nom_lib`, `nom_app`, `nom_c2test`, and
 `nom_python_module`. Each helper calls `nom_enable_std_modules()` internally after creating
 the target; disabled apps, tests and Python extensions skip this setup. Interface libraries
-reject the option because they compile no sources. The helper checks
-`CMAKE_CXX_COMPILER_IMPORT_STD` for C++23 and sets `CXX_MODULE_STD ON` only on that target.
+reject the option because they compile no sources. On CMake 4.5 and newer the helper checks
+the discovered standard-library module metadata and enables `CXX_SCAN_FOR_MODULES` on the target.
+On 4.4 it checks `CMAKE_CXX_COMPILER_IMPORT_STD` for C++23 and enables `CXX_MODULE_STD`.
 For targets created outside the kit, keep calling `nom_enable_std_modules(target)` directly,
 with a guard if the target may be absent. Find Catch2 before the test helper as usual.
 For Clang, only the vendor's `std`/`std.compat` sources receive
 `-Wno-reserved-module-identifier`; project warning settings remain intact.
 
-The experimental gate in `std_modules.cmake` is specific to CMake 4.4. Other CMake series need
-validation and an updated configuration; the helper rejects them instead of silently using a
-stale gate. The shared configure presets use schema version 12 and
-`"warnings": { "experimental": false }` to acknowledge experimental features while leaving
-other developer warnings enabled. For configuration without these presets, pass
-`-Wno-experimental` explicitly; target helpers do not change warning policy.
-When adopting this in an existing build, reconfigure from a fresh build directory
-so CXX toolchain detection runs with the gate enabled.
+Source consumers supporting 4.4 include the entry point before their outer `project()` so
+compiler detection sees the experimental gate. Start a fresh build when switching CMake versions.
+The shared presets suppress experimental warnings with `"warnings": { "experimental": false }`.
 
-Source consumers must include the entry point before their outer `project()`; loading it from
-a dependency is too late. Installed-package consumers without the kit must enable CMake 4.4's
-`CMAKE_EXPERIMENTAL_CXX_IMPORT_STD` gate (`f35a9ac6-8463-4d38-8eec-5d6008153e7d`) before `project()`,
-set C++23, check `CMAKE_CXX_COMPILER_IMPORT_STD`, and set `CXX_MODULE_STD ON` on their consuming
-targets. The library usage fixture demonstrates both paths using the kit helper.
+Installed-package consumers without the kit use C++23 and module scanning on CMake 4.5 and newer.
+On 4.4 they also set `CMAKE_EXPERIMENTAL_CXX_IMPORT_STD` to
+`f35a9ac6-8463-4d38-8eec-5d6008153e7d` before `project()`, check
+`CMAKE_CXX_COMPILER_IMPORT_STD`, and set `CXX_MODULE_STD ON` on their consuming targets.
+The library usage fixture demonstrates source and package consumption using the kit helper.
 
 CMake discovers vendor module sources through the toolchain metadata and builds compatible
 compiled module interfaces before their importers. These are compiler/flag-specific build
